@@ -1,0 +1,24 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Все артефакты сборки (app, pkg, иконки, временные папки инсталлера)
+build/
+
+# Кэш SwiftPM (остался от первых экспериментов; сейчас сборка через swiftc)
+.build/
+.swiftpm/
+
+# На всякий случай — если что-то из артефактов окажется вне build/
+*.app
+*.pkg
+*.dmg
+*.icns
+*.iconset/
+
+# Xcode (не используется, но стандартно для Swift-проектов)
+xcuserdata/
+DerivedData/
+*.xcodeproj/project.xcworkspace/xcuserdata/

@@ -76,6 +76,12 @@ enum LayoutSwitch {
         select(toRussian: !isRussian)
     }
 
+    /// Текущая системная раскладка — русская?
+    static func currentIsRussian() -> Bool {
+        guard let current = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() else { return false }
+        return id(current)?.lowercased().contains("russian") ?? false
+    }
+
     /// Отладка: печатает доступные раскладки.
     static func debugPrint() {
         print("Доступные раскладки (включённые):")

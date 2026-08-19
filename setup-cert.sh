@@ -38,7 +38,7 @@ openssl pkcs12 -export \
 security import "$TMP/cert.p12" -k "$KEYCHAIN" -P ali \
     -T /usr/bin/codesign -T /usr/bin/security 2>/dev/null
 
-# Доверие: codesign видит только доверенные identity
+# Trust: codesign only sees trusted identities
 security add-trusted-cert -r trustRoot -k "$KEYCHAIN" "$TMP/cert.pem" 2>/dev/null
 
 security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" "$KEYCHAIN" >/dev/null 2>&1 || true

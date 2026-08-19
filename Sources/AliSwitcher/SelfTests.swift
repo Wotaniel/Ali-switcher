@@ -1,7 +1,7 @@
 import Foundation
 
-/// Автотесты чистой логики AliSwitcher (без GUI и системных прав).
-/// Запуск: AliSwitcher --test  (exit 0 = все прошли, 1 = есть падения)
+/// Self-tests of the pure AliSwitcher logic (no GUI, no system permissions).
+/// Run: AliSwitcher --test  (exit 0 = all passed, 1 = failures)
 enum SelfTests {
 
     private static var passed = 0
@@ -14,16 +14,16 @@ enum SelfTests {
         testTypingMap()
 
         print("")
-        print("— Итог —")
-        print("✅ пройдено: \(passed), ❌ упало: \(failed)")
+        print("— Result —")
+        print("✅ passed: \(passed), ❌ failed: \(failed)")
         if !failures.isEmpty {
-            print("Упавшие проверки:")
+            print("Failed checks:")
             for f in failures { print("  ✗ \(f)") }
         }
         return failed == 0
     }
 
-    // MARK: - Хелперы
+    // MARK: - Helpers
 
     private static func check(_ name: String, _ condition: Bool, _ detail: String = "") {
         if condition {
@@ -60,7 +60,7 @@ enum SelfTests {
         check("RU→EN «х»→«[», «ъ»→«]»", conv("хъ") == "[]")
         check("RU→EN «ж»→«;», «э»→«'»", conv("жэ") == ";'")
         check("RU→EN «ю»→«.», «я»→«z»", conv("юя") == ".z")
-        // Знаки внутри слова (одиночный знак convert() не берёт: нет букв)
+        // Signs inside a word (a lone sign is skipped by convert(): no letters)
         check("RU→EN «привет.» точка→«/»", conv("привет.") == "ghbdtn/")
         check("RU→EN «день №»→«ltym #»", conv("день №") == "ltym #")
 
@@ -74,17 +74,17 @@ enum SelfTests {
         check("EN→RU «@»→«\"»", conv("ghbdtn@") == "привет\"")
         check("EN→RU «;»→«ж»", conv("ghbdtn;") == "приветж")
 
-        // Направление
+        // Direction
         check("направление: кириллица → toLatin",
               Translit.convert("привет")?.direction == .toLatin)
         check("направление: латиница → toCyrillic",
               Translit.convert("hello")?.direction == .toCyrillic)
 
-        // Нет букв — no-op
+        // No letters — no-op
         check("нет букв «123 !!!» → nil", conv("123 !!!") == nil)
         check("пусто → nil", conv("") == nil)
 
-        // Пример пользователя: конвертируется именно ФРАГМЕНТ (как в реальном сценарии)
+        // User example: it is the FRAGMENT that gets converted (as in the real scenario)
         let chunk = " b yfgbcfk ytcrjkmrj ckjd yf lheujq hfcrkflrt^ ye;yj xnj,s dsltkbkjcm dct yfgbcfyyjt b"
         check("пример пользователя: конвертация фрагмента",
               conv(chunk) == " и написал несколько слов на другой раскладке: нужно чтобы выделилось все написанное и",
@@ -120,18 +120,18 @@ enum SelfTests {
               "получили: «\(exChunk)»")
     }
 
-    // MARK: - Карта печати (QWERTY)
+    // MARK: - Typing map (QWERTY)
 
     private static func testTypingMap() {
         print("— KeyEvents: карта QWERTY —")
 
-        // Та же логика, что в KeyEvents.type(): символ → QWERTY-сосед (или сам символ)
+        // Same logic as in KeyEvents.type(): char → QWERTY neighbour (or itself)
         func typeable(_ ch: Character) -> Bool {
             let source: Character = Translit.enOnSameKey(ch) ?? ch
             return KeyEvents.canType(source)
         }
 
-        // Каждая буква русского текста печатаема
+        // Every letter of Russian text must be typeable
         let ru = "и написал несколько слов на другой раскладке чтобы выделилось всё"
         var allTypeable = true
         var bad: [Character] = []
@@ -143,7 +143,7 @@ enum SelfTests {
         }
         check("все буквы «\(ru.prefix(20))…» печатаемы", allTypeable, "проблемные: \(bad)")
 
-        // Знаки препинания печатаемы (в русской раскладке)
+        // Punctuation must be typeable (in the Russian layout)
         let symbols = "№;:,?.{}"
         var symbolsOK = true
         bad = []

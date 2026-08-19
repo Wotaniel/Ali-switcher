@@ -1,8 +1,8 @@
 import Carbon
 import Darwin
 
-/// Переключение раскладки через Text Input Sources (Carbon TIS).
-/// Тот же механизм, что использует утилита macism.
+/// Layout switching via Text Input Sources (Carbon TIS).
+/// The same mechanism used by the macism utility.
 enum LayoutSwitch {
 
     private static func sources() -> [TISInputSource] {
@@ -11,7 +11,7 @@ enum LayoutSwitch {
             false
         )?.takeRetainedValue() else { return [] }
 
-        // CFArray свободно мостится в NSArray; элементы — TISInputSourceRef.
+        // CFArray bridges freely to NSArray; elements are TISInputSourceRef.
         return (cfArray as NSArray).map { $0 as! TISInputSource }
     }
 
@@ -29,13 +29,13 @@ enum LayoutSwitch {
         property(source, kTISPropertyLocalizedName)
     }
 
-    /// Переключает системную раскладку на русскую или английскую.
-    /// Возвращает false, если подходящая раскладка не найдена (не установлена в системе).
+    /// Switches the system layout to Russian or English.
+    /// Returns false if no suitable layout is found (not installed in the system).
     @discardableResult
     static func select(toRussian: Bool) -> Bool {
         let sources = self.sources()
 
-        // 1. Точные известные ID
+        // 1. Known exact IDs
         let exactTargets: [String] = toRussian
             ? ["com.apple.keylayout.Russian", "com.apple.keylayout.Russian-PC", "com.apple.keylayout.RussianWin"]
             : ["com.apple.keylayout.US", "com.apple.keylayout.ABC", "com.apple.keylayout.ABC-AZERTY"]
@@ -46,7 +46,7 @@ enum LayoutSwitch {
             }
         }
 
-        // 2. Эвристика по ID и имени
+        // 2. Heuristic by ID and name
         if toRussian {
             if let match = sources.first(where: { (id($0) ?? "").lowercased().contains("russian") }) {
                 TISSelectInputSource(match)
@@ -65,8 +65,8 @@ enum LayoutSwitch {
         return false
     }
 
-    /// Переключает раскладку на противоположную текущей:
-    /// если сейчас русская — станет английская, иначе — русская.
+    /// Toggles the layout to the opposite of the current one:
+    /// if it is Russian now — English, otherwise — Russian.
     static func toggle() {
         guard let current = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() else { return }
         let currentID = (id(current) ?? "").lowercased()
@@ -76,15 +76,15 @@ enum LayoutSwitch {
         select(toRussian: !isRussian)
     }
 
-    /// Текущая системная раскладка — русская?
+    /// Is the current system layout Russian?
     static func currentIsRussian() -> Bool {
         guard let current = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() else { return false }
         return id(current)?.lowercased().contains("russian") ?? false
     }
 
-    /// Отладка: печатает доступные раскладки.
+    /// Debug: prints the available layouts.
     static func debugPrint() {
-        print("Доступные раскладки (включённые):")
+        print("Available layouts (enabled):")
         for source in sources() {
             print("  \(id(source) ?? "?")  —  \(name(source) ?? "?")")
         }

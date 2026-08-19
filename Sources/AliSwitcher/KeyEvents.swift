@@ -1,12 +1,14 @@
 import Cocoa
 import Carbon.HIToolbox
 
-/// Постинг синтетических клавиатурных событий в активное приложение.
+/// Posting synthetic keyboard events to the active application.
 enum KeyEvents {
 
-    /// Отправляет нажатие клавиши (down + up) с заданными модификаторами.
+    /// Sends a key press (down + up) with the given modifiers.
+    /// privateState marks the event as synthetic so our own handler can
+    /// distinguish it from real user keystrokes.
     static func post(keyCode: CGKeyCode, flags: CGEventFlags = []) {
-        guard let source = CGEventSource(stateID: .combinedSessionState) else { return }
+        guard let source = CGEventSource(stateID: .privateState) else { return }
         if let down = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true) {
             down.flags = flags
             down.post(tap: .cghidEventTap)
@@ -17,18 +19,24 @@ enum KeyEvents {
         }
     }
 
-    /// Cmd+C — копирование выделения в буфер обмена.
+    /// Cmd+C — copy the selection to the clipboard.
     static func copySelection() {
         post(keyCode: CGKeyCode(kVK_ANSI_C), flags: [.maskCommand])
     }
 
-    /// Cmd+V — вставка из буфера обмена (заменяет выделение).
+    /// Cmd+V — paste from the clipboard (replaces the selection).
     static func paste() {
         post(keyCode: CGKeyCode(kVK_ANSI_V), flags: [.maskCommand])
     }
 
-    /// Отправляет count нажатий Backspace (удаление символов или выделения).
-    static func backspace(count: Int, completion: @escaping () -> Void) {        guard count > 0 else {
+    /// Cmd+Z — undo the last action (reverse selection conversion).
+    static func undo() {
+        post(keyCode: CGKeyCode(kVK_ANSI_Z), flags: [.maskCommand])
+    }
+
+    /// Sends count Backspace presses (removes characters or the selection).
+    static func backspace(count: Int, completion: @escaping () -> Void) {
+        guard count > 0 else {
             completion()
             return
         }
@@ -46,9 +54,9 @@ enum KeyEvents {
         }
     }
 
-    // MARK: - Печать текста клавишами
+    // MARK: - Typing text via keys
 
-    /// Карта «символ на QWERTY-позиции → (virtual keycode, нужен ли Shift)».
+    /// Map "character at QWERTY position → (virtual keycode, needs Shift?)".
     private static let qwerty: [Character: (CGKeyCode, Bool)] = [
         "a": (0, false), "s": (1, false), "d": (2, false), "f": (3, false),
         "h": (4, false), "g": (5, false), "z": (6, false), "x": (7, false),
@@ -74,20 +82,20 @@ enum KeyEvents {
         ">": (47, true), "~": (50, true),
     ]
 
-    /// Можно ли напечатать этот символ (есть ли клавиша в QWERTY-позиции).
+    /// Can this character be typed (does it have a QWERTY key)?
     static func canType(_ qwertyChar: Character) -> Bool {
         qwerty[qwertyChar] != nil
     }
 
-    /// Печатает текст клавишами в ТЕКУЩЕЙ (уже переключённой) раскладке.
-    /// Печать поверх выделения заменяет его — работает без буфера обмена.
+    /// Types the text with keys in the CURRENT (already switched) layout.
+    /// Typing over the selection replaces it — no clipboard needed.
     static func type(_ text: String, toRussian: Bool, completion: (() -> Void)? = nil) {
         let chars = Array(text)
         guard !chars.isEmpty else {
             completion?()
             return
         }
-        // Пауза перед первой клавишей: приложение должно успеть применить новую раскладку.
+        // Pause before the first key: the app needs time to apply the new layout.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             typeNext(chars, index: 0, toRussian: toRussian, completion: completion)
         }
@@ -99,7 +107,7 @@ enum KeyEvents {
             return
         }
         let ch = chars[index]
-        // Какая физическая клавиша (в QWERTY-позиции) даёт этот символ в целевой раскладке?
+        // Which physical key (at QWERTY position) produces this character in the target layout?
         let source: Character = (toRussian ? Translit.enOnSameKey(ch) : nil) ?? ch
         if let (keyCode, shift) = qwerty[source] {
             post(keyCode: keyCode, flags: shift ? [.maskShift] : [])

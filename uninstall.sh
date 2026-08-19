@@ -1,5 +1,5 @@
 #!/bin/bash
-# Полное удаление AliSwitcher. Запускать с sudo (или через меню приложения).
+# Full AliSwitcher removal. Run with sudo (or via the app menu).
 set -euo pipefail
 
 CONSOLE_USER=$(stat -f "%Su" /dev/console 2>/dev/null || true)
@@ -10,35 +10,35 @@ kill_all() {
     sleep 1
 }
 
-echo "▸ Останавливаю приложение..."
+echo "▸ Stopping the app..."
 kill_all
 
-echo "▸ Сбрасываю права (TCC: Специальные возможности / Наблюдение за вводом)..."
+echo "▸ Resetting permissions (TCC: Accessibility / Input Monitoring)..."
 if [ -n "$CONSOLE_USER" ] && [ "$CONSOLE_USER" != "root" ]; then
     sudo -u "$CONSOLE_USER" tccutil reset Accessibility local.alishch.aliswitcher 2>/dev/null || true
     sudo -u "$CONSOLE_USER" tccutil reset ListenEvent local.alishch.aliswitcher 2>/dev/null || true
 fi
 
-echo "▸ Отключаю автозапуск (LaunchAgent)..."
+echo "▸ Disabling Launch at Login (LaunchAgent)..."
 launchctl bootout "gui/$CONSOLE_UID/local.alishch.aliswitcher" 2>/dev/null || true
 rm -f /Library/LaunchAgents/local.alishch.aliswitcher.plist
 
-echo "▸ Удаляю приложение из /Applications..."
+echo "▸ Removing the app from /Applications..."
 rm -rf /Applications/AliSwitcher.app
 
-echo "▸ Ищу и удаляю остальные копии приложения..."
+echo "▸ Searching for and removing other app copies..."
 ps -xo command 2>/dev/null | grep '/AliSwitcher.app/Contents/MacOS/AliSwitcher' | grep -v grep | awk '{print $1}' | sed 's#/Contents/MacOS/AliSwitcher$##' | sort -u | while read -r p; do
-    [ -n "$p" ] && [ -d "$p" ] && rm -rf "$p" && echo "  удалено: $p"
+    [ -n "$p" ] && [ -d "$p" ] && rm -rf "$p" && echo "  removed: $p"
 done
-# На случай если процесс ещё жив после удаления файлов — убиваем снова
+# In case the process is still alive after file removal — kill again
 kill_all
 
-echo "▸ Забываю запись об установке..."
+echo "▸ Forgetting the installation record..."
 pkgutil --forget local.alishch.aliswitcher 2>/dev/null || true
 
-echo "▸ Чищу временные файлы и логи..."
+echo "▸ Cleaning temp files and logs..."
 rm -f /tmp/AliSwitcher.log /tmp/local.alishch.aliswitcher.lock
 rm -f "$HOME/Library/Logs/DiagnosticReports/AliSwitcher-"*.ips 2>/dev/null || true
 
 echo ""
-echo "✓ AliSwitcher полностью удалён."
+echo "✓ AliSwitcher fully removed."

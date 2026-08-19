@@ -2,20 +2,20 @@ import Cocoa
 import Carbon.HIToolbox
 import ServiceManagement
 
-// MARK: - Конфигурация
+// MARK: - Configuration
 
-/// Максимальная пауза между двумя нажатиями Shift, которая считается «двойным шифтом» (сек).
+/// Max pause between two Shift presses considered a "double-Shift" (sec).
 let kDoubleShiftInterval: TimeInterval = 0.25
-/// Предел длины буфера набора (защита от неограниченного роста).
+/// Typing buffer length limit (protection against unbounded growth).
 let kMaxBufferLength = 500
 
 let kLeftShiftKeyCode: CGKeyCode = 56   // kVK_Shift
 let kRightShiftKeyCode: CGKeyCode = 60  // kVK_RightShift
 
-// MARK: - Иконка в строке меню
+// MARK: - Menu bar icon
 
 enum StatusIcon {
-    /// label — «RU» или «EN» (текущая раскладка); enabled=false — приглушённая версия (прав нет).
+    /// label — «RU» or «EN» (current layout); enabled=false — dimmed (no permissions).
     static func make(label: String, enabled: Bool = true) -> NSImage {
         let image = NSImage(size: NSSize(width: 18, height: 18))
         image.lockFocus()
@@ -32,7 +32,7 @@ enum StatusIcon {
     }
 }
 
-// MARK: - Главный класс
+// MARK: - Main class
 
 final class Switcher: NSObject {
 
@@ -41,70 +41,76 @@ final class Switcher: NSObject {
     private var busy = false
     private var isReplacing = false
     private var tapActive = false
+    /// After converting a selection — true. Another double-Shift (with no other
+    /// actions in between) undoes the paste (Cmd+Z) — toggle back.
+    private var lastWasSelectionConvert = false
 
-    /// Защищённое поле (пароль) в фокусе: не слушаем и не конвертируем.
+    /// A secure field (password) is focused: we neither listen nor convert it.
     private var secureField = false
 
-    /// Буфер набора: запоминаем, что пользователь напечатал (как Punto/Caramba).
-    /// Это позволяет стереть текст Backspace'ами и напечатать конвертированный
-    /// в ЛЮБОМ приложении (включая VS Code, Slack) — без Accessibility.
+    /// Typing buffer: we remember what the user typed (like Punto/Caramba).
+    /// This lets us erase the text with Backspaces and retype the converted one
+    /// in ANY app (VS Code, Slack included) — no Accessibility needed.
     private var typedBuffer = ""
 
     private var statusStateItem: NSMenuItem?
     private var autostartItem: NSMenuItem?
+    private var a11yStatusItem: NSMenuItem?
+    private var listenStatusItem: NSMenuItem?
     private var tapRetryTimer: Timer?
 
     func start() {
         let app = NSApplication.shared
-        // Фоновое приложение: Dock-иконки нет; она появляется только пока
-        // открыт диалог прав (см. showPermissionsGuide).
+        // Background app: no Dock icon; it appears only while the
+        // permissions panel is open (see showPermissionsGuide).
         app.setActivationPolicy(.accessory)
         setupMainMenu()
         setupStatusItem()
         updateStatusIcon()
-        // Иконка следует за раскладкой (в т.ч. когда пользователь меняет её вручную).
+        updatePermissionStatus()
+        // The icon follows the layout (also when the user switches it manually).
         Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.updateStatusIcon()
         }
 
-        // 1. Запрашиваем права (система покажет диалоги)
+        // 1. Silent permission check (no system dialogs — our own panel
+        //    explains everything, see showPermissionsGuide).
         Accessibility.requestPermissionIfNeeded()
-        if !CGPreflightListenEventAccess() { CGRequestListenEventAccess() }
 
-        // 2. Event tap с ретраями: приложение живёт и само ждёт, пока права выдадут.
+        // 2. Event tap with retries: the app stays alive and waits for permissions.
         startEventTap()
 
-        // 3. Если прав нет — показываем окно-инструкцию.
+        // 3. If permissions are missing — show the guide window.
         if !AXIsProcessTrusted() || !CGPreflightListenEventAccess() {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
                 self?.showPermissionsGuide()
             }
         }
 
-        // 4. При первом запуске — спрашиваем про автозапуск.
+        // 4. On first launch — ask about Launch at Login.
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             self?.showAutostartPromptIfNeeded()
         }
 
-        print("▶  AliSwitcher работает. Двойной Shift = конвертация фрагмента + смена раскладки.")
-        print("   Индикатор в строке меню: «RU» → клик → «Выйти».")
+        print("▶  AliSwitcher is running. Double-Shift = convert text + switch layout.")
+        print("   Menu bar icon: «RU» → click → Quit.")
         app.run()
     }
 
-    // MARK: - Меню приложения (в строке меню, когда приложение активно)
+    // MARK: - App menu (in the menu bar when the app is active)
 
     private func setupMainMenu() {
         let mainMenu = NSMenu()
         let appMenuItem = NSMenuItem()
         mainMenu.addItem(appMenuItem)
         let appMenu = NSMenu()
-        let guide = NSMenuItem(title: "Настроить права…",
+        let guide = NSMenuItem(title: "Permissions…",
                                action: #selector(showPermissionsGuide),
                                keyEquivalent: "")
         guide.target = self
         appMenu.addItem(guide)
         appMenu.addItem(.separator())
-        let quit = NSMenuItem(title: "Выйти",
+        let quit = NSMenuItem(title: "Quit",
                               action: #selector(NSApplication.terminate(_:)),
                               keyEquivalent: "q")
         quit.target = NSApp
@@ -113,20 +119,32 @@ final class Switcher: NSObject {
         NSApp.mainMenu = mainMenu
     }
 
-    // MARK: - Статус-бар
+    // MARK: - Status bar
 
     private func setupStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.image = StatusIcon.make(label: "RU", enabled: false)
         let menu = NSMenu()
 
-        let state = NSMenuItem(title: "AliSwitcher: жду права…", action: nil, keyEquivalent: "")
+        let state = NSMenuItem(title: "AliSwitcher: waiting for permissions…", action: nil, keyEquivalent: "")
         state.isEnabled = false
         menu.addItem(state)
         menu.addItem(.separator())
 
-        // Автозапуск при входе (SMAppService)
-        let autostart = NSMenuItem(title: "Автозапуск при входе",
+        // Permission status: red dot = missing, green = granted
+        let a11yStatus = NSMenuItem(title: "Accessibility", action: nil, keyEquivalent: "")
+        a11yStatus.isEnabled = false
+        menu.addItem(a11yStatus)
+        a11yStatusItem = a11yStatus
+
+        let listenStatus = NSMenuItem(title: "Input Monitoring", action: nil, keyEquivalent: "")
+        listenStatus.isEnabled = false
+        menu.addItem(listenStatus)
+        listenStatusItem = listenStatus
+        menu.addItem(.separator())
+
+        // Launch at Login (SMAppService)
+        let autostart = NSMenuItem(title: "Launch at Login",
                                    action: #selector(toggleAutostart),
                                    keyEquivalent: "")
         autostart.target = self
@@ -135,27 +153,27 @@ final class Switcher: NSObject {
         autostartItem = autostart
         menu.addItem(.separator())
 
-        // ВАЖНО: у фонового приложения нет first responder, поэтому у каждого
-        // пункта с действием должен быть явный target — иначе он будет серым.
-        let a11yItem = NSMenuItem(title: "Права: Специальные возможности…",
+        // IMPORTANT: a background app has no first responder, so every menu item
+        // with an action needs an explicit target — otherwise it turns grey.
+        let a11yItem = NSMenuItem(title: "Permissions: Accessibility…",
                                   action: #selector(openAccessibilitySettings),
                                   keyEquivalent: "")
         a11yItem.target = self
         menu.addItem(a11yItem)
 
-        let listenItem = NSMenuItem(title: "Права: Наблюдение за вводом…",
+        let listenItem = NSMenuItem(title: "Permissions: Input Monitoring…",
                                     action: #selector(openInputMonitoringSettings),
                                     keyEquivalent: "")
         listenItem.target = self
         menu.addItem(listenItem)
 
-        let guideItem = NSMenuItem(title: "Как настроить права…",
+        let guideItem = NSMenuItem(title: "How to set permissions…",
                                    action: #selector(showPermissionsGuide),
                                    keyEquivalent: "")
         guideItem.target = self
         menu.addItem(guideItem)
 
-        let uninstallItem = NSMenuItem(title: "Удалить AliSwitcher…",
+        let uninstallItem = NSMenuItem(title: "Uninstall AliSwitcher…",
                                        action: #selector(uninstallApp),
                                        keyEquivalent: "")
         uninstallItem.target = self
@@ -163,7 +181,7 @@ final class Switcher: NSObject {
 
         menu.addItem(.separator())
 
-        let quitItem = NSMenuItem(title: "Выйти",
+        let quitItem = NSMenuItem(title: "Quit",
                                   action: #selector(NSApplication.terminate(_:)),
                                   keyEquivalent: "q")
         quitItem.target = NSApp
@@ -174,11 +192,22 @@ final class Switcher: NSObject {
         statusStateItem = state
     }
 
+    /// Updates the permission status rows in the menu (red/green dot) and the icon.
+    private func updatePermissionStatus() {
+        let ax = AXIsProcessTrusted()
+        let listen = CGPreflightListenEventAccess()
+        a11yStatusItem?.title = "\(ax ? "🟢" : "🔴") Accessibility"
+        listenStatusItem?.title = "\(listen ? "🟢" : "🔴") Input Monitoring"
+        statusStateItem?.title = (ax && listen)
+            ? "AliSwitcher — double-Shift works"
+            : "AliSwitcher: waiting for permissions (AX=\(ax), Listen=\(listen))"
+    }
+
     @objc private func openAccessibilitySettings() {
         openPrivacyPane("Privacy_Accessibility")
     }
 
-    /// Переключатель «Автозапуск при входе» (SMAppService, macOS 13+).
+    /// «Launch at Login» toggle (SMAppService, macOS 13+).
     @objc private func toggleAutostart() {
         if SMAppService.mainApp.status == .enabled {
             try? SMAppService.mainApp.unregister()
@@ -187,8 +216,8 @@ final class Switcher: NSObject {
                 try SMAppService.mainApp.register()
                 if SMAppService.mainApp.status == .requiresApproval {
                     let alert = NSAlert()
-                    alert.messageText = "Нужно подтверждение автозапуска"
-                    alert.informativeText = "Включите AliSwitcher в Системных настройках → Основные → Элементы входа."
+                    alert.messageText = "Login Item needs approval"
+                    alert.informativeText = "Enable AliSwitcher in System Settings → General → Login Items."
                     alert.addButton(withTitle: "OK")
                     showModal(alert)
                 }
@@ -199,16 +228,16 @@ final class Switcher: NSObject {
         autostartItem?.state = (SMAppService.mainApp.status == .enabled) ? .on : .off
     }
 
-    /// При первом запуске спрашиваем, добавить ли приложение в автозапуск.
+    /// On first launch asks whether to add the app to Launch at Login.
     private func showAutostartPromptIfNeeded() {
         guard !UserDefaults.standard.bool(forKey: "didAskAutostart") else { return }
         UserDefaults.standard.set(true, forKey: "didAskAutostart")
 
         let alert = NSAlert()
-        alert.messageText = "Запускать AliSwitcher при входе?"
-        alert.informativeText = "Добавить AliSwitcher в автозапуск, чтобы переключатель всегда был готов к работе?"
-        alert.addButton(withTitle: "Да")
-        alert.addButton(withTitle: "Нет")
+        alert.messageText = "Launch AliSwitcher at login?"
+        alert.informativeText = "Add AliSwitcher to login items so the switcher is always ready?"
+        alert.addButton(withTitle: "Yes")
+        alert.addButton(withTitle: "No")
         let response = showModal(alert)
         if response == .alertFirstButtonReturn {
             try? SMAppService.mainApp.register()
@@ -220,8 +249,8 @@ final class Switcher: NSObject {
         openPrivacyPane("Privacy_ListenEvent")
     }
 
-    /// Показывает модальное окно ПОВЕРХ всего, включая полноэкранные приложения:
-    /// окно становится вспомогательным (floating) и видимым на всех Space.
+    /// Shows a modal window ABOVE everything, including full-screen apps:
+    /// the window becomes auxiliary (floating) and visible on all Spaces.
     private func showModal(_ alert: NSAlert) -> NSApplication.ModalResponse {
         let window = alert.window
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
@@ -232,8 +261,8 @@ final class Switcher: NSObject {
         return alert.runModal()
     }
 
-    /// Окно-инструкция по правам: не закрывается при нажатии кнопок,
-    /// пока пользователь не нажмёт «Готово» (можно открыть оба раздела настроек).
+    /// Permissions guide window: does not close on button presses until
+    /// «Done» (both settings sections can be opened).
     private var permissionsPanel: NSPanel?
 
     @objc private func showPermissionsGuide() {
@@ -250,7 +279,7 @@ final class Switcher: NSObject {
             backing: .buffered,
             defer: false
         )
-        panel.title = "AliSwitcher: нужны разрешения"
+        panel.title = "AliSwitcher: permissions needed"
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         panel.level = .floating
         panel.isReleasedWhenClosed = false
@@ -259,32 +288,32 @@ final class Switcher: NSObject {
         let content = NSView(frame: NSRect(x: 0, y: 0, width: 460, height: 300))
 
         let label = NSTextField(wrappingLabelWithString: """
-        Разрешения выдаются в Системных настройках → Конфиденциальность и безопасность.
+        Permissions are granted in System Settings → Privacy & Security.
 
-        ОБЯЗАТЕЛЬНО:
-        • «Наблюдение за вводом» — слежение за нажатиями (двойной Shift).
-        ЖЕЛАТЕЛЬНО:
-        • «Специальные возможности» — выделенный текст и защита полей паролей.
+        REQUIRED:
+        • Input Monitoring — tracking keystrokes (double-Shift).
+        RECOMMENDED:
+        • Accessibility — selected text conversion and password-field protection.
 
-        Кнопки ниже открывают нужные разделы — окно при этом останется.
+        The buttons below open the settings — the window stays open.
         """)
         label.frame = NSRect(x: 20, y: 130, width: 420, height: 150)
         label.font = NSFont.systemFont(ofSize: 13)
         content.addSubview(label)
 
-        let listenButton = NSButton(title: "Наблюдение за вводом…",
+        let listenButton = NSButton(title: "Input Monitoring…",
                                     target: self,
                                     action: #selector(openInputMonitoringSettings))
         listenButton.frame = NSRect(x: 20, y: 90, width: 280, height: 28)
         content.addSubview(listenButton)
 
-        let a11yButton = NSButton(title: "Специальные возможности…",
+        let a11yButton = NSButton(title: "Accessibility…",
                                   target: self,
                                   action: #selector(openAccessibilitySettings))
         a11yButton.frame = NSRect(x: 20, y: 56, width: 280, height: 28)
         content.addSubview(a11yButton)
 
-        let doneButton = NSButton(title: "Готово",
+        let doneButton = NSButton(title: "Done",
                                   target: self,
                                   action: #selector(closePermissionsPanel))
         doneButton.frame = NSRect(x: 20, y: 14, width: 100, height: 28)
@@ -302,29 +331,29 @@ final class Switcher: NSObject {
         NSApp.setActivationPolicy(.accessory)
     }
 
-    /// Полное удаление: предупреждение → скрипт uninstall.sh с правами администратора.
+    /// Full uninstall: warning → uninstall.sh with administrator rights.
     @objc private func uninstallApp() {
         let alert = NSAlert()
-        alert.messageText = "Удалить AliSwitcher?"
+        alert.messageText = "Uninstall AliSwitcher?"
         alert.informativeText = """
-        Будут удалены:
-        • приложение из /Applications;
-        • автозапуск (LaunchAgent);
-        • запись об установке, логи и временные файлы.
+        This will remove:
+        • the app from /Applications;
+        • Launch at Login item;
+        • installation record, logs and temp files.
 
-        Действие нельзя отменить. Продолжить?
+        This cannot be undone. Continue?
         """
-        alert.addButton(withTitle: "Удалить")
-        alert.addButton(withTitle: "Отмена")
+        alert.addButton(withTitle: "Uninstall")
+        alert.addButton(withTitle: "Cancel")
         let response = showModal(alert)
         guard response == .alertFirstButtonReturn else { return }
 
-        // Запускаем uninstall.sh с правами администратора (macOS запросит пароль).
-        // Путь берём из собственного бандла — приложение может работать откуда угодно.
+        // Run uninstall.sh with administrator rights (macOS asks for the password).
+        // Path is taken from our own bundle — the app can run from anywhere.
         let script = Bundle.main.bundlePath + "/Contents/Resources/uninstall.sh"
         guard FileManager.default.fileExists(atPath: script) else {
             let err = NSAlert()
-            err.messageText = "Не найден скрипт удаления"
+            err.messageText = "Uninstall script not found"
             err.informativeText = script
             err.addButton(withTitle: "OK")
             showModal(err)
@@ -363,11 +392,12 @@ final class Switcher: NSObject {
         ) else {
             let ax = AXIsProcessTrusted()
             let listen = CGPreflightListenEventAccess()
-            log("⚠  Event tap не создан: Accessibility=\(ax), InputMonitoring=\(listen)")
+            log("⚠  Event tap not created: Accessibility=\(ax), InputMonitoring=\(listen)")
             tapActive = false
-            statusItem?.button?.toolTip = "AliSwitcher: жду права (AX=\(ax), Listen=\(listen))"
+            updatePermissionStatus()
+            statusItem?.button?.toolTip = "AliSwitcher: waiting for permissions (AX=\(ax), Listen=\(listen))"
             updateStatusIcon()
-            statusStateItem?.title = "AliSwitcher: жду права (AX=\(ax), Listen=\(listen)) — Системные настройки → Конфиденциальность"
+            statusStateItem?.title = "AliSwitcher: waiting for permissions (AX=\(ax), Listen=\(listen)) — System Settings → Privacy & Security"
             tapRetryTimer?.invalidate()
             tapRetryTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
                 self?.startEventTap()
@@ -382,21 +412,22 @@ final class Switcher: NSObject {
         let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
-        log("✔  Event tap активен — права есть, жду двойной Shift")
+        log("✔  Event tap active — permissions granted, waiting for double-Shift")
         tapActive = true
-        statusItem?.button?.toolTip = "AliSwitcher: работает (двойной Shift)"
+        updatePermissionStatus()
+        statusItem?.button?.toolTip = "AliSwitcher: working (double-Shift)"
         updateStatusIcon()
-        statusStateItem?.title = "AliSwitcher — двойной Shift работает"
-        print("✔  Event tap активен.")
+        statusStateItem?.title = "AliSwitcher — double-Shift works"
+        print("✔  Event tap active.")
     }
 
-    /// Иконка в строке меню: «RU»/«EN» по текущей раскладке.
+    /// Menu bar icon: «RU»/«EN» for the current layout.
     private func updateStatusIcon() {
         let label = LayoutSwitch.currentIsRussian() ? "RU" : "EN"
         statusItem?.button?.image = StatusIcon.make(label: label, enabled: tapActive)
     }
 
-    // MARK: - Обработка событий
+    // MARK: - Event handling
 
     private func handle(event: CGEvent, type: CGEventType) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
@@ -408,16 +439,22 @@ final class Switcher: NSObject {
 
         switch type {
         case .keyDown:
-            // Любая клавиша сбрасывает счётчик «двойного шифта»
+            // Any key press resets the double-Shift counter
             lastShiftPress = 0
-            // Запоминаем, что напечатано (для Punto-механизма)
+            // Selection toggle reset — only on real user keystrokes.
+            // Our own synthetic Cmd+C/Cmd+V/Cmd+Z (privateState) don't count.
+            if lastWasSelectionConvert, !isSynthetic(event) {
+                lastWasSelectionConvert = false
+            }
+            // Remember what was typed (Punto mechanism)
             trackTyping(event)
             return Unmanaged.passUnretained(event)
 
         case .leftMouseDown, .rightMouseDown, .otherMouseDown:
-            // Клик мышью — набранный фрагмент «потерян» (курсор мог уехать)
+            // Mouse click — the typed fragment is "lost" (caret may have moved)
             typedBuffer = ""
             secureField = false
+            lastWasSelectionConvert = false
             return Unmanaged.passUnretained(event)
 
         case .flagsChanged:
@@ -439,7 +476,7 @@ final class Switcher: NSObject {
             if lastShiftPress != 0,
                now - lastShiftPress < kDoubleShiftInterval,
                lastShiftRelease > lastShiftPress {
-                // Двойной Shift — съедаем второе нажатие и запускаем конвертацию.
+                // Double-Shift — eat the second press and trigger conversion.
                 lastShiftPress = 0
                 triggerSwitch()
                 return nil
@@ -451,12 +488,18 @@ final class Switcher: NSObject {
         return Unmanaged.passUnretained(event)
     }
 
-    /// Обновляет буфер набора по событию клавиши.
+    /// Is the event synthetic (ours)? Synthetic events created by us
+    /// via CGEventSource have eventSourceUnixProcessID == our PID.
+    private func isSynthetic(_ event: CGEvent) -> Bool {
+        event.getIntegerValueField(.eventSourceUnixProcessID) == Int64(getpid())
+    }
+
+    /// Updates the typing buffer from a key event.
     private func trackTyping(_ event: CGEvent) {
         guard let layout = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() else { return }
         switch KeyTracker.action(for: event, currentLayout: layout) {
         case .text(let s):
-            // В начале нового фрагмента проверяем, не пароль ли это поле.
+            // At the start of a new fragment check whether this is a password field.
             if typedBuffer.isEmpty, !secureField {
                 secureField = isFocusedFieldSecure()
             }
@@ -481,7 +524,7 @@ final class Switcher: NSObject {
         return Accessibility.isSecureField(element)
     }
 
-    // MARK: - Конвертация
+    // MARK: - Conversion
 
     private func triggerSwitch() {
         guard !busy else { return }
@@ -493,29 +536,37 @@ final class Switcher: NSObject {
 
     private func performSwitch() {
         defer { busy = false }
-        log("switch: буфер «\(redact(typedBuffer))»")
+        log("switch: buffer «\(redact(typedBuffer))»")
 
-        // Парольное поле — не трогаем вообще.
+        // Password field — do not touch at all.
         if secureField {
-            log("switch: защищённое поле — пропускаю")
+            log("switch: secure field — skipping")
             return
         }
 
-        // 1) Если буфер пуст — возможно, пользователь выделил текст:
-        //    конвертируем выделение через буфер обмена (Cmd+C → конвертация → Cmd+V).
-        //    Работает в любых приложениях, включая VS Code/Slack, без Accessibility.
+        // 1) If the buffer is empty, the user may have selected text.
         if typedBuffer.isEmpty {
+            // 1a) Right after a selection conversion (and with no other actions)
+            //     another double-Shift undoes the paste (Cmd+Z) — toggle back.
+            if lastWasSelectionConvert {
+                log("toggle: undoing the last conversion (Cmd+Z)")
+                lastWasSelectionConvert = false
+                KeyEvents.undo()
+                return
+            }
+            // 1b) Try to convert the selection via the clipboard.
+            //     If there is no selection — a layout toggle happens inside.
             convertSelectionViaClipboard()
             return
         }
 
-        // 2) Основной путь: фрагмент из реального текста (если AX доступен) или из буфера.
+        // 2) Main path: fragment from real text (if AX is available) or from the buffer.
         convertTypedText()
     }
 
-    /// Конвертация выделенного текста через буфер обмена:
-    /// Cmd+C → читаем буфер → конвертируем → Cmd+V (заменяет выделение).
-    /// Если выделения нет — просто переключает раскладку.
+    /// Converts the selected text via the clipboard:
+    /// Cmd+C → read the buffer → convert → Cmd+V (replaces the selection).
+    /// If there is no selection or nothing to convert — toggles the layout.
     private func convertSelectionViaClipboard() {
         guard !isReplacing else { return }
         isReplacing = true
@@ -533,14 +584,15 @@ final class Switcher: NSObject {
                   !text.isEmpty,
                   let result = Translit.convert(text),
                   result.converted != text else {
-                // Выделения нет или конвертировать нечего — просто переключаем раскладку.
-                self.log("selection(copy): нечего копировать/конвертировать → toggle")
+                // No selection or nothing to convert — just toggle the layout.
+                self.log("selection(copy): nothing to copy/convert → toggle")
                 Clipboard.restore(saved)
                 self.isReplacing = false
                 LayoutSwitch.toggle()
                 return
             }
             self.log("selection(copy): «\(self.redact(text))» → «\(self.redact(result.converted))»")
+            self.lastWasSelectionConvert = true
             LayoutSwitch.select(toRussian: result.direction == .toCyrillic)
             Clipboard.copy(result.converted)
             KeyEvents.paste()
@@ -551,23 +603,23 @@ final class Switcher: NSObject {
         }
     }
 
-    /// Основной путь: находим фрагмент «набранного не в той раскладке»
-    /// (по реальному тексту поля, если Accessibility доступен, иначе по буферу),
-    /// стираем его Backspace'ами и печатаем конвертированный текст.
+    /// Main path: find the "typed in the wrong layout" fragment
+    /// (from real field text if Accessibility is available, otherwise from the buffer),
+    /// erase it with Backspaces and retype the converted text.
     private func convertTypedText() {
         let ns: NSString
         if let real = realTextBeforeCaret(), !real.isEmpty {
             ns = real as NSString
-            log("convert: использую реальный текст поля (\(ns.length) симв.)")
+            log("convert: using real field text (\(ns.length) chars)")
         } else {
             ns = typedBuffer as NSString
-            log("convert: использую буфер набора (\(ns.length) симв.)")
+            log("convert: using typing buffer (\(ns.length) chars)")
         }
 
         let caret = ns.length
         let start = ChunkFinder.chunkStart(in: ns, before: caret)
         guard start < caret else {
-            log("convert: фрагмент пуст → toggle")
+            log("convert: empty fragment → toggle")
             LayoutSwitch.toggle()
             return
         }
@@ -575,7 +627,7 @@ final class Switcher: NSObject {
         guard !chunk.isEmpty,
               let result = Translit.convert(chunk),
               result.converted != chunk else {
-            log("convert: «\(chunk)» не конвертируется → toggle")
+            log("convert: «\(chunk)» cannot be converted → toggle")
             LayoutSwitch.toggle()
             return
         }
@@ -585,7 +637,7 @@ final class Switcher: NSObject {
                           toRussian: result.direction == .toCyrillic)
     }
 
-    /// Текст поля до позиции курсора (если Accessibility доступен).
+    /// The field text before the caret (if Accessibility is available).
     private func realTextBeforeCaret() -> String? {
         guard let element = Accessibility.focusedElement(),
               let whole = Accessibility.value(element),
@@ -596,26 +648,26 @@ final class Switcher: NSObject {
         return ns.substring(with: NSRange(location: 0, length: caret))
     }
 
-    /// Переключаем раскладку, стираем deleteCount символов, печатаем текст.
+    /// Switches the layout, erases deleteCount characters, types the text.
     private func replaceByDeleting(_ text: String, deleteCount: Int, toRussian: Bool) {
         guard !isReplacing else { return }
         guard LayoutSwitch.select(toRussian: toRussian) else {
-            log("replaceByDeleting: нет нужной раскладки — текст не трогаю")
+            log("replaceByDeleting: no target layout — leaving text as is")
             return
         }
         isReplacing = true
         KeyEvents.backspace(count: deleteCount) { [weak self] in
             guard let self else { return }
-            self.log("удалено \(deleteCount), печатаю «\(text)»")
+            self.log("deleted \(deleteCount), typing «\(text)»")
             KeyEvents.type(text, toRussian: toRussian) {
                 self.isReplacing = false
             }
         }
     }
 
-    // MARK: - Лог
+    // MARK: - Log
 
-    /// Укорачивает текст в логе (приватность: не пишем содержимое целиком).
+    /// Shortens text in the log (privacy: do not write full content).
     private func redact(_ s: String, limit: Int = 24) -> String {
         guard s.count > limit else { return s }
         return s.prefix(limit) + "…"
@@ -635,18 +687,18 @@ final class Switcher: NSObject {
     }
 }
 
-// MARK: - Глобальное состояние
+// MARK: - Global state
 
 var currentTap: CFMachPort?
 var statusItem: NSStatusItem?
 
-// MARK: - Синглтон: только один экземпляр приложения
+// MARK: - Singleton: only one app instance
 
 var singletonLockFD: Int32 = -1
 
-/// Захватывает эксклюзивную блокировку (flock). Если другой экземпляр уже
-/// запущен (LaunchAgent + ручной запуск, автозапуск + open), второй не сможет
-/// получить блокировку и завершится — никаких дубликатов и двойных event tap.
+/// Acquires an exclusive lock (flock). If another instance is already running
+/// (LaunchAgent + manual launch, autostart + open), the second one cannot
+/// acquire the lock and exits — no duplicates, no double event taps.
 func acquireSingletonLock() -> Bool {
     let lockPath = "/tmp/local.alishch.aliswitcher.lock"
     let fd = open(lockPath, O_CREAT | O_RDWR, 0o600)
@@ -655,11 +707,11 @@ func acquireSingletonLock() -> Bool {
         close(fd)
         return false
     }
-    singletonLockFD = fd // держим открытым всё время жизни процесса
+    singletonLockFD = fd // keep it open for the process lifetime
     return true
 }
 
-// MARK: - Запуск
+// MARK: - Launch
 
 if CommandLine.arguments.contains("--test") {
     exit(SelfTests.run() ? 0 : 1)
@@ -671,10 +723,10 @@ if CommandLine.arguments.contains("--layouts") {
 }
 
 if !acquireSingletonLock() {
-    print("AliSwitcher уже запущен — второй экземпляр выходит.")
+    print("AliSwitcher already running — second instance exits.")
     exit(0)
 }
 
-print("AliSwitcher — переключатель раскладки по двойному Shift (RU ↔ EN)")
-print("================================================================")
+print("AliSwitcher — RU/EN layout switcher via double-Shift")
+print("====================================================")
 Switcher().start()

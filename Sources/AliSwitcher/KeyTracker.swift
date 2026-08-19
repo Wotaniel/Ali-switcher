@@ -1,23 +1,23 @@
 import Cocoa
 import Carbon
 
-/// Определяет, что делает нажатая клавиша: вводит текст, удаляет, обрывает фрагмент.
-/// Это «буфер набора», как в Punto/Caramba: мы запоминаем, что напечатал пользователь,
-/// чтобы потом стереть это Backspace'ами и напечатать конвертированное.
+/// Figures out what a pressed key does: types text, deletes, or breaks the fragment.
+/// This is the "typing buffer", like in Punto/Caramba: we remember what the user
+/// typed so we can erase it with Backspaces and retype the converted text.
 enum KeyTracker {
 
     enum Action {
-        case text(String)        // клавиша вставила этот текст (в текущей раскладке)
-        case deleteBackward      // Backspace — удалили последний символ
-        case reset               // курсор уехал / новая строка — фрагмент оборвался
-        case ignore              // служебное (Cmd-сочетание, Escape и т.п.)
+        case text(String)        // the key inserted this text (in the current layout)
+        case deleteBackward      // Backspace — removed the last character
+        case reset               // caret moved / new line — fragment broken
+        case ignore              // special (Cmd combo, Escape, etc.)
     }
 
     static func action(for event: CGEvent, currentLayout: TISInputSource) -> Action {
         let keyCode = Int(event.getIntegerValueField(.keyboardEventKeycode))
         let flags = event.flags
 
-        // Служебные и навигационные клавиши
+        // Special and navigation keys
         switch keyCode {
         case 36, 76: return .reset        // Return / Enter
         case 48: return .reset            // Tab
@@ -25,14 +25,14 @@ enum KeyTracker {
         case 53: return .ignore           // Escape
         case 115, 116, 119, 121: return .reset // Home / PageUp / End / PageDown
         case 117: return .ignore          // ForwardDelete
-        case 123, 124, 125, 126: return .reset // стрелки
+        case 123, 124, 125, 126: return .reset // arrows
         default: break
         }
 
-        // Сочетания с Command/Control — не текст (copy/paste/undo и т.п.)
+        // Command/Control combos — not text (copy/paste/undo etc.)
         if flags.contains(.maskCommand) || flags.contains(.maskControl) { return .ignore }
 
-        // Переводим keycode + модификаторы в символ(ы) текущей раскладки (UCKeyTranslate)
+        // Translate keycode + modifiers into character(s) of the current layout (UCKeyTranslate)
         guard let layoutData = TISGetInputSourceProperty(currentLayout, kTISPropertyUnicodeKeyLayoutData) else {
             return .ignore
         }

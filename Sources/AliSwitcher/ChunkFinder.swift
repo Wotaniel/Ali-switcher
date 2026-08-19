@@ -1,29 +1,29 @@
 import Foundation
 
-/// Поиск границы «фрагмента, набранного не в той раскладке».
+/// Finds the start of the "typed in the wrong layout" fragment.
 ///
-/// Правило (как в Punto): от позиции курсора идём влево, захватывая
-/// буквы, цифры, пробелы и знаки препинания. Граница фрагмента — это
-/// первая буква ДРУГОГО алфавита (кириллица ↔ латиница) либо перевод
-/// строки/таб. Пробелы и знаки внутри фрагмента «прозрачны», поэтому
-/// фраза «b yfgbcfk ytcrjkmrj ckjd …» выделяется целиком, а не по словам.
+/// Rule (like Punto): walk left from the caret, taking letters, digits, spaces
+/// and punctuation. The fragment boundary is the first letter of the OTHER
+/// alphabet (Cyrillic ↔ Latin) or a newline/tab. Spaces and punctuation inside
+/// the fragment are "transparent", so the phrase "b yfgbcfk ytcrjkmrj ckjd …"
+/// is selected whole, not word by word.
 ///
-/// Важно: работаем с UTF-16 смещениями (как AX API и NSString), а не
-/// с Character-индексами Swift, чтобы не разъезжались позиции.
+/// Important: we work with UTF-16 offsets (like the AX API and NSString),
+/// not Swift Character indices, so positions never drift.
 enum ChunkFinder {
 
     enum Script {
         case cyrillic, latin
     }
 
-    /// Возвращает UTF-16 индекс начала фрагмента перед позицией `caret`.
+    /// Returns the UTF-16 index of the fragment start before `caret`.
     static func chunkStart(in text: NSString, before caret: Int) -> Int {
         guard caret > 0 else { return 0 }
         var script: Script? = nil
         var i = caret - 1
         while i >= 0 {
             let codeUnit = text.character(at: i)
-            // Суррогатная пара (эмодзи и т.п.) — не буква, пропускаем прозрачно.
+            // Surrogate pair (emoji etc.) — not a letter, skip transparently.
             guard let scalar = UnicodeScalar(codeUnit) else {
                 i -= 1
                 continue
@@ -31,14 +31,14 @@ enum ChunkFinder {
             if CharacterSet.letters.contains(scalar) {
                 let s: Script = isCyrillic(scalar) ? .cyrillic : .latin
                 if let current = script {
-                    if current != s { break } // алфавит сменился — граница
+                    if current != s { break } // alphabet changed — boundary
                 } else {
                     script = s
                 }
             } else if codeUnit == 0x000A || codeUnit == 0x000D || codeUnit == 0x0009 {
-                break // перевод строки / таб — жёсткая граница
+                break // newline / tab — hard boundary
             }
-            // цифры, пробелы, знаки препинания — прозрачны, идём дальше
+            // digits, spaces, punctuation — transparent, keep going
             i -= 1
         }
         return i + 1

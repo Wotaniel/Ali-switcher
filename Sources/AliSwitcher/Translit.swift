@@ -1,28 +1,28 @@
 import Foundation
 
-/// Куда переключаем раскладку после конвертации текста.
+/// Where to switch the layout after converting text.
 enum SwitchDirection {
-    /// Текст был набран кириллицей в английской раскладке → станет латиницей, включаем EN.
+    /// The text was typed in Cyrillic within the English layout → becomes Latin, switch to EN.
     case toLatin
-    /// Текст был набран латиницей в русской раскладке → станет кириллицей, включаем RU.
+    /// The text was typed in Latin within the Russian layout → becomes Cyrillic, switch to RU.
     case toCyrillic
 }
 
-/// Перевод текста из одной раскладки в другую (ЙЦУКЕН ↔ QWERTY).
+/// Converts text between layouts (ЙЦУКЕН ↔ QWERTY).
 enum Translit {
 
-    // Клавиша-в-клавишу: русская буква → латинская буква/символ на той же клавише.
+    // Key-to-key: Russian letter → Latin letter/symbol on the same key.
     private static let ruToEn: [Character: Character] = [
-        // верхний ряд
+        // top row
         "й": "q", "ц": "w", "у": "e", "к": "r", "е": "t", "н": "y",
         "г": "u", "ш": "i", "щ": "o", "з": "p", "х": "[", "ъ": "]",
-        // средний ряд
+        // middle row
         "ф": "a", "ы": "s", "в": "d", "а": "f", "п": "g", "р": "h",
         "о": "j", "л": "k", "д": "l", "ж": ";", "э": "'",
-        // нижний ряд
+        // bottom row
         "я": "z", "ч": "x", "с": "c", "м": "v", "и": "b", "т": "n",
         "ь": "m", "б": ",", "ю": ".",
-        // ё и знаки (Shift-варианты)
+        // ё and symbols (Shift variants)
         "ё": "`", "Ё": "~",
         "Й": "Q", "Ц": "W", "У": "E", "К": "R", "Е": "T", "Н": "Y",
         "Г": "U", "Ш": "I", "Щ": "O", "З": "P", "Х": "{", "Ъ": "}",
@@ -30,9 +30,9 @@ enum Translit {
         "О": "J", "Л": "K", "Д": "L", "Ж": ":", "Э": "\"",
         "Я": "Z", "Ч": "X", "С": "C", "М": "V", "И": "B", "Т": "N",
         "Ь": "M", "Б": "<", "Ю": ">",
-        // точка в русской раскладке — это "/" в английской
+        // dot in the Russian layout is "/" in the English one
         ".": "/",
-        // знаки препинания: пересчёт по клавише (Shift+6 RU = ":", в EN даёт "^", и т.п.)
+        // punctuation: key-based mapping (Shift+6 RU = ":", EN gives "^", etc.)
         "№": "#", "\"": "@", ";": "$", ":": "^", "?": "&",
     ]
 
@@ -46,12 +46,12 @@ enum Translit {
         (ch >= "а" && ch <= "я") || (ch >= "А" && ch <= "Я") || ch == "ё" || ch == "Ё"
     }
 
-    /// Английский символ на той же физической клавише (для печати в русской раскладке).
+    /// The English character on the same physical key (for typing in the Russian layout).
     static func enOnSameKey(_ ru: Character) -> Character? {
         ruToEn[ru]
     }
 
-    /// Определяет направление по большинству букв и возвращает сконвертированный текст.
+    /// Determines the direction by the majority of letters and returns the converted text.
     static func convert(_ text: String) -> (converted: String, direction: SwitchDirection)? {
         var cyrillic = 0
         var latin = 0

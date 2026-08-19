@@ -1,5 +1,5 @@
 #!/bin/bash
-# Генерирует build/AliSwitcher.icns (простая картинка, без Xcode).
+# Generates build/AliSwitcher.icns (a simple image, no Xcode).
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -47,4 +47,4 @@ for s in 16 32 128 256 512; do
     sips -z "$((s * 2))" "$((s * 2))" build/icon-1024.png --out "build/icon.iconset/icon_${s}x${s}@2x.png" >/dev/null
 done
 iconutil -c icns build/icon.iconset -o build/AliSwitcher.icns
-echo "✓ Иконка: build/AliSwitcher.icns"
+echo "✓ Icon: build/AliSwitcher.icns"

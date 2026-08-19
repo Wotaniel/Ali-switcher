@@ -1,29 +1,29 @@
 #!/bin/bash
-# Сборка AliSwitcher: swiftc → .app бандл.
-# Сборка/подпись идут в /tmp (ВНЕ iCloud): FileProvider из iCloud Drive
-# подмешивает в build/ мусор (xattr/._/macl) прямо во время codesign,
-# из-за чего подпись периодически «падала». Готовый .app копируется в build/.
+# Build AliSwitcher: swiftc → .app bundle.
+# Build/sign happen in /tmp (OUTSIDE iCloud): the iCloud FileProvider mixes junk
+# (xattr/._/macl) into build/ during codesign, which broke signatures randomly.
+# The finished .app is copied to build/.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# Тулчейн: предпочитаем swiftly (системная CLT на этой машине рассинхронизирована).
+# Prefer the swiftly toolchain (system CLT on this machine is out of sync).
 if [ -f "$HOME/.swiftly/env.sh" ]; then
     # shellcheck disable=SC1091
     . "$HOME/.swiftly/env.sh"
 fi
-swiftc --version >/dev/null 2>&1 || { echo "✗ Нет рабочего swiftc. Установите тулчейн: brew install swiftly && swiftly init -y"; exit 1; }
+swiftc --version >/dev/null 2>&1 || { echo "✗ No working swiftc. Install a toolchain: brew install swiftly && swiftly init -y"; exit 1; }
 
 mkdir -p build
 
-# Иконка (в build/ — она не участвует в подписи)
+# Icon (in build/ — not part of the signature)
 ./make-icon.sh
 
-# Временная папка сборки вне iCloud
+# Build dir outside iCloud
 STAGE=$(mktemp -d /tmp/aliswitcher-build.XXXXXX)
 trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/app/Contents/MacOS" "$STAGE/app/Contents/Resources"
 
-echo "▸ Сборка универсального бинаря (arm64 + x86_64)..."
+echo "▸ Building universal binary (arm64 + x86_64)..."
 swiftc -O -swift-version 5 -target arm64-apple-macosx13.0 \
     Sources/AliSwitcher/*.swift -o "$STAGE/AliSwitcher-arm64"
 swiftc -O -swift-version 5 -target x86_64-apple-macosx13.0 \
@@ -63,31 +63,31 @@ cat > "$STAGE/app/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-# Подпись стабильным сертификатом (в /tmp — без вмешательства iCloud)
+# Sign with the stable certificate (in /tmp — no iCloud interference)
 CERT_NAME="AliSwitcher Code Signing"
 if security find-identity -v -p codesigning 2>/dev/null | grep -q "$CERT_NAME"; then
     codesign --force --sign "$CERT_NAME" "$STAGE/app"
 else
-    echo "⚠  Сертификат не найден — подписываю ad-hoc (права будут слетать при пересборках)."
-    echo "   Создайте сертификат один раз: ./setup-cert.sh"
+    echo "⚠  Certificate not found — signing ad-hoc (permissions will be lost on rebuilds)."
+    echo "   Create the certificate once: ./setup-cert.sh"
     codesign --force --sign - "$STAGE/app"
 fi
 
-# Готовый подписанный .app — в build/
-# Если старый build/AliSwitcher.app занят iCloud/root (не удаляется) —
-# кладём в build/app/AliSwitcher.app.
+# Copy the signed .app to build/
+# If the old build/AliSwitcher.app is locked by iCloud/root (cannot be removed) —
+# put it into build/app/AliSwitcher.app instead.
 OUT_APP="build/AliSwitcher.app"
 if ! rm -rf "$OUT_APP" 2>/dev/null; then
-    echo "⚠  build/AliSwitcher.app не удаляется (root/iCloud) — собираю в $OUT_APP/.. app/"
+    echo "⚠  build/AliSwitcher.app cannot be removed (root/iCloud) — building into build/app/"
     OUT_APP="build/app/AliSwitcher.app"
     mkdir -p build/app
     rm -rf "$OUT_APP"
 fi
 ditto "$STAGE/app" "$OUT_APP"
 
-codesign --verify "$OUT_APP" || { echo "✗ Проверка подписи не прошла"; exit 1; }
+codesign --verify "$OUT_APP" || { echo "✗ Signature verification failed"; exit 1; }
 
 echo ""
-echo "✓ Готово: $OUT_APP (universal: arm64 + x86_64)"
-echo "  Запуск:   open \"$OUT_APP\""
-echo "  Инсталлер: ./make-dmg.sh → dist/AliSwitcher.dmg"
+echo "✓ Done: $OUT_APP (universal: arm64 + x86_64)"
+echo "  Run:     open \"$OUT_APP\""
+echo "  DMG:     ./make-dmg.sh → dist/AliSwitcher.dmg"

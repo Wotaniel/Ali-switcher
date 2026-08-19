@@ -1,30 +1,28 @@
 import Cocoa
 import ApplicationServices
 
-/// Работа с Accessibility API: чтение выделенного текста в приложении на переднем плане.
+/// Accessibility API: reading selected text in the frontmost app.
 enum Accessibility {
 
     static var isTrusted: Bool { AXIsProcessTrusted() }
 
-    /// Показывает системный запрос на «Специальные возможности», если права ещё нет.
+    /// Silent permission check (no system dialog — our own panel explains everything).
     @discardableResult
     static func requestPermissionIfNeeded() -> Bool {
-        if AXIsProcessTrusted() { return true }
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        return AXIsProcessTrustedWithOptions(options)
+        AXIsProcessTrusted()
     }
 
-    /// Элемент, в котором сейчас находится курсор (в приложении на переднем плане).
+    /// The element that currently holds the caret (in the frontmost app).
     static func focusedElement() -> AXUIElement? {
         let systemWide = AXUIElementCreateSystemWide()
 
-        // 1) Системно-широкий фокус
+        // 1) System-wide focus
         if let el = attribute(of: systemWide, kAXFocusedUIElementAttribute as CFString) {
             return el
         }
 
-        // 2) Фолбэк для приложений со слабой AX (Electron и т.п.):
-        //    сфокусированное приложение → сфокусированное окно → элемент
+        // 2) Fallback for apps with weak AX (Electron etc.):
+        //    focused app → focused window → element
         if let app = attribute(of: systemWide, kAXFocusedApplicationAttribute as CFString) {
             if let window = attribute(of: app, kAXFocusedWindowAttribute as CFString),
                let el = attribute(of: window, kAXFocusedUIElementAttribute as CFString) {
@@ -44,7 +42,7 @@ enum Accessibility {
         return (value as! AXUIElement)
     }
 
-    /// Поле является защищённым (пароль): такие поля не слушаем и не конвертируем.
+    /// Is the field secure (password)? We neither listen to nor convert such fields.
     static func isSecureField(_ element: AXUIElement) -> Bool {
         var roleValue: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleValue) == .success,
@@ -52,7 +50,7 @@ enum Accessibility {
         return role == "AXSecureTextField"
     }
 
-    /// Текст, выделенный в данный момент в фокусе.
+    /// Text currently selected in the focused element.
     static func selectedText() -> String? {
         guard let element = focusedElement() else { return nil }
         return selectedText(of: element)
@@ -70,7 +68,7 @@ enum Accessibility {
         return String(value as! CFString)
     }
 
-    /// Весь текст поля/области, где находится курсор (UTF-16 длина = NSString.length).
+    /// The whole text of the field/area (UTF-16 length = NSString.length).
     static func value(_ element: AXUIElement) -> String? {
         var value: CFTypeRef?
         let err = AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value)
@@ -79,16 +77,16 @@ enum Accessibility {
         return String(value as! CFString)
     }
 
-    /// Текущий диапазон выделения (или позиция курсора, если длина 0).
-    /// Смещения — UTF-16, как у NSString.
+    /// Current selection range (or caret position when length is 0).
+    /// Offsets are UTF-16, like NSString.
     static func selectedRange(_ element: AXUIElement) -> CFRange? {
         var value: CFTypeRef?
         let err = AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &value)
         guard err == .success, let value else { return nil }
         let axValue = (value as! AXValue)
 
-        // Одни приложения хранят диапазон как CFRange, другие — как пару Int32
-        // в CGPoint-структуре. Пробуем оба варианта.
+        // Some apps store the range as CFRange, others as a pair of Int32s
+        // in a CGPoint struct. Try both.
         var range = CFRange(location: 0, length: 0)
         if AXValueGetValue(axValue, .cfRange, &range) {
             return range
@@ -104,7 +102,7 @@ enum Accessibility {
         return nil
     }
 
-    /// Устанавливает выделенный диапазон (UTF-16 смещения).
+    /// Sets the selected range (UTF-16 offsets).
     @discardableResult
     static func setSelectedRange(_ element: AXUIElement, _ range: CFRange) -> Bool {
         var r = range

@@ -1,10 +1,10 @@
 import Cocoa
 
-/// Снимок буфера обмена: хранит ДАННЫЕ (тип → Data), а не ссылки на NSPasteboardItem.
-/// Ссылки инвалидируются вызовом clearContents(), и запись их обратно
-/// падает с исключением в -[NSPasteboard writeObjects:] (SIGABRT).
+/// Clipboard snapshot: stores DATA (type → Data), not references to NSPasteboardItem.
+/// References get invalidated by clearContents(), and writing them back crashes
+/// with an exception in -[NSPasteboard writeObjects:] (SIGABRT).
 struct ClipboardSnapshot {
-    /// Каждый элемент буфера — список «тип → данные».
+    /// Each pasteboard item is a list of "type → data" entries.
     let items: [[(type: NSPasteboard.PasteboardType, data: Data)]]
 }
 

@@ -46,8 +46,15 @@ enum KeyTracker {
         var length: Int = 0
 
         var modifierState: UInt32 = 0
-        if flags.contains(.maskShift) { modifierState |= UInt32(shiftKey) }
-        if flags.contains(.maskAlternate) { modifierState |= UInt32(optionKey) }
+        // ВАЖНО: UCKeyTranslate ожидает КЛАССИЧЕСКИЕ значения модификаторов
+        // (shiftKey=2, controlKey=4, optionKey=8, cmdKey=16, alphaLock=256),
+        // а не shiftKey/alphaLock из текущего SDK (там другие числа) —
+        // с ними shift/регистр просто игнорируются.
+        if flags.contains(.maskShift) { modifierState |= 2 }        // shiftKey
+        if flags.contains(.maskControl) { modifierState |= 4 }      // controlKey
+        if flags.contains(.maskAlternate) { modifierState |= 8 }    // optionKey
+        if flags.contains(.maskCommand) { modifierState |= 16 }     // cmdKey
+        if flags.contains(.maskAlphaShift) { modifierState |= 256 } // alphaLock (Caps Lock)
 
         let status = UCKeyTranslate(layoutPtr,
                                     UInt16(keyCode),

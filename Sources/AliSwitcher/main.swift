@@ -12,6 +12,23 @@ let kMaxBufferLength = 500
 let kLeftShiftKeyCode: CGKeyCode = 56   // kVK_Shift
 let kRightShiftKeyCode: CGKeyCode = 60  // kVK_RightShift
 
+// MARK: - Timing constants (centralized for easy tuning)
+
+enum Timing {
+    /// Delay between successive backspace key presses.
+    static let backspaceDelay: TimeInterval = 0.008
+    /// Delay between successive character typing.
+    static let typeDelay: TimeInterval = 0.01
+    /// Delay after switching layout before typing begins (let layout settle).
+    static let layoutSwitchDelay: TimeInterval = 0.05
+    /// Delay before backspace begins in auto-convert (after layout switch).
+    static let autoConvertDelay: TimeInterval = 0.02
+    /// Delay to allow clipboard copy to complete before reading.
+    static let clipboardWait: TimeInterval = 0.15
+    /// Delay before restoring clipboard after paste.
+    static let clipboardRestore: TimeInterval = 0.4
+}
+
 // MARK: - Menu bar icon
 
 enum StatusIcon {
@@ -45,6 +62,28 @@ final class Switcher: NSObject {
     /// actions in between) undoes the paste (Cmd+Z) — toggle back.
     private var lastWasSelectionConvert = false
 
+    /// After auto-converting a word — stores info to undo the conversion.
+    /// Double-Shift right after auto-convert reverts to the original text and
+    /// layout (backspace the converted text, retype the original).
+    /// Undoing also adds the trigger word to the exceptions list (self-learning,
+    /// like Caramba: "delete + retype = skip this word next time").
+    /// Any real (non-synthetic) keystroke cancels the undo window.
+    private var lastAutoConvertInfo: (
+        original: String,      // text to retype in the original layout
+        backspaceCount: Int,   // chars to delete (converted text + boundary)
+        undoToRussian: Bool,   // switch back to the opposite layout
+        triggerWord: String    // the word that triggered conversion (for exceptions)
+    )?;
+
+    /// Words that should NOT be auto-converted (learned from undo).
+    /// Stored in UserDefaults as a Set<String>.
+    private var autoExceptions: Set<String> = []
+
+    /// Auto mode (Punto Switcher style): automatically converts words at
+    /// word boundaries using NSSpellChecker.
+    private var autoModeEnabled = false
+    private var autoModeItem: NSMenuItem?
+
     /// A secure field (password) is focused: we neither listen nor convert it.
     private var secureField = false
 
@@ -64,6 +103,11 @@ final class Switcher: NSObject {
         // Background app: no Dock icon; it appears only while the
         // permissions panel is open (see showPermissionsGuide).
         app.setActivationPolicy(.accessory)
+        autoModeEnabled = UserDefaults.standard.bool(forKey: "autoModeEnabled")
+        // Load persisted exception words (learned from undo).
+        if let arr = UserDefaults.standard.array(forKey: "autoExceptions") as? [String] {
+            autoExceptions = Set(arr)
+        }
         setupMainMenu()
         setupStatusItem()
         updateStatusIcon()
@@ -151,6 +195,16 @@ final class Switcher: NSObject {
         autostart.state = (SMAppService.mainApp.status == .enabled) ? .on : .off
         menu.addItem(autostart)
         autostartItem = autostart
+        menu.addItem(.separator())
+
+        // Auto Switch (Punto Switcher style: auto-detect wrong layout)
+        let autoMode = NSMenuItem(title: "Auto Switch",
+                                  action: #selector(toggleAutoMode),
+                                  keyEquivalent: "")
+        autoMode.target = self
+        autoMode.state = autoModeEnabled ? .on : .off
+        menu.addItem(autoMode)
+        autoModeItem = autoMode
         menu.addItem(.separator())
 
         // IMPORTANT: a background app has no first responder, so every menu item
@@ -247,6 +301,14 @@ final class Switcher: NSObject {
 
     @objc private func openInputMonitoringSettings() {
         openPrivacyPane("Privacy_ListenEvent")
+    }
+
+    /// «Auto Switch» toggle (Punto Switcher style auto-detection).
+    @objc private func toggleAutoMode() {
+        autoModeEnabled = !autoModeEnabled
+        UserDefaults.standard.set(autoModeEnabled, forKey: "autoModeEnabled")
+        autoModeItem?.state = autoModeEnabled ? .on : .off
+        log("auto mode: \(autoModeEnabled ? "ON" : "OFF")")
     }
 
     /// Shows a modal window ABOVE everything, including full-screen apps:
@@ -446,8 +508,31 @@ final class Switcher: NSObject {
             if lastWasSelectionConvert, !isSynthetic(event) {
                 lastWasSelectionConvert = false
             }
-            // Remember what was typed (Punto mechanism)
-            trackTyping(event)
+            // Real keystrokes cancel the auto-convert undo window.
+            if lastAutoConvertInfo != nil, !isSynthetic(event) {
+                lastAutoConvertInfo = nil
+            }
+            // Auto mode: on word-boundary characters (space, period, etc.)
+            // check the preceding word and auto-convert if needed.
+            // IMPORTANT: we block the original boundary character (return nil)
+            // and re-type it after conversion — otherwise backspace erases
+            // the wrong characters (space is already printed after the word).
+            // Cache KeyTracker.action to avoid calling it twice per keystroke.
+            if autoModeEnabled, !busy, !isReplacing, !secureField, !isSynthetic(event) {
+                if let layout = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() {
+                    let action = KeyTracker.action(for: event, currentLayout: layout)
+                    if case .text(let s) = action, s.count == 1, AutoSwitcher.isBoundary(s[s.startIndex]) {
+                        if tryAutoConvert(boundaryChar: s) {
+                            return nil  // block boundary char — re-typed after conversion
+                        }
+                    }
+                    // Reuse the cached action (don't call KeyTracker again)
+                    trackTypedAction(action)
+                }
+            } else if !isSynthetic(event) {
+                // Don't track our own synthetic events — they'd pollute the buffer
+                trackTyping(event)
+            }
             return Unmanaged.passUnretained(event)
 
         case .leftMouseDown, .rightMouseDown, .otherMouseDown:
@@ -455,6 +540,7 @@ final class Switcher: NSObject {
             typedBuffer = ""
             secureField = false
             lastWasSelectionConvert = false
+            lastAutoConvertInfo = nil
             return Unmanaged.passUnretained(event)
 
         case .flagsChanged:
@@ -497,7 +583,14 @@ final class Switcher: NSObject {
     /// Updates the typing buffer from a key event.
     private func trackTyping(_ event: CGEvent) {
         guard let layout = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() else { return }
-        switch KeyTracker.action(for: event, currentLayout: layout) {
+        let action = KeyTracker.action(for: event, currentLayout: layout)
+        trackTypedAction(action)
+    }
+
+    /// Updates the typing buffer from a pre-computed KeyTracker.Action.
+    /// Allows caching the action result to avoid calling KeyTracker twice.
+    private func trackTypedAction(_ action: KeyTracker.Action) {
+        switch action {
         case .text(let s):
             // At the start of a new fragment check whether this is a password field.
             if typedBuffer.isEmpty, !secureField {
@@ -524,6 +617,162 @@ final class Switcher: NSObject {
         return Accessibility.isSecureField(element)
     }
 
+    // MARK: - Auto Switch (Punto Switcher style)
+
+    /// Extracts the last word from the typing buffer (everything after the
+    /// last boundary character) and attempts auto-conversion via NSSpellChecker.
+    /// Returns true if auto-conversion was triggered (boundary char blocked),
+    /// false if no conversion needed (boundary char should pass through).
+    private func tryAutoConvert(boundaryChar: String) -> Bool {
+        guard !busy, !isReplacing else { return false }
+
+        // Parse the entire buffer into (word, gap) segments.
+        // Example: "f e ghbdtn" → [("f", " "), ("e", " "), ("ghbdtn", "")]
+        let segments = parseBufferSegments()
+
+        // The last segment's word is what we check first.
+        guard let lastSegment = segments.last,
+              lastSegment.word.count >= AutoSwitcher.minWordLength else { return false }
+
+        // Skip words in the exceptions list (learned from previous undos).
+        if autoExceptions.contains(lastSegment.word) {
+            return false
+        }
+
+        guard let result = AutoSwitcher.shouldConvert(lastSegment.word) else { return false }
+
+        // Retroactive: walk backwards from the last word and convert all previous
+        // words that are also in the wrong layout (same direction). We lower the
+        // threshold to 1 char since we already know the user was in the wrong layout.
+        var convertedText = result.converted
+        var deleteCount = lastSegment.word.count
+
+        var wordIndex = segments.count - 2
+        while wordIndex >= 0 {
+            let prevSeg = segments[wordIndex]
+            // The gap between previous word and the next word was already typed
+            // (it passed through as a boundary char). We need to include it.
+            let gap = segments[wordIndex].gap
+            if let prevResult = AutoSwitcher.shouldConvert(prevSeg.word, minLength: 1),
+               prevResult.direction == result.direction {
+                convertedText = prevResult.converted + gap + convertedText
+                deleteCount += prevSeg.word.count + gap.count
+                wordIndex -= 1
+            } else {
+                break  // Stop — this word is not in the wrong layout.
+            }
+        }
+
+        let toRussian = result.direction == .toCyrillic
+        log("auto: «\(redact(lastSegment.word))» → «\(redact(result.converted))» (retroactive \(segments.count - wordIndex - 1) words, deleting \(deleteCount))")
+
+        // Compute the original text (pre-conversion) for undo support.
+        var originalText = ""
+        for segIdx in (wordIndex + 1)..<segments.count {
+            originalText += segments[segIdx].word + segments[segIdx].gap
+        }
+        let fullConvertedText = convertedText + boundaryChar
+
+        busy = true
+        isReplacing = true
+        guard LayoutSwitch.select(toRussian: toRussian) else {
+            log("auto: no target layout — skipping")
+            busy = false
+            isReplacing = false
+            return false
+        }
+        typedBuffer = ""
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + Timing.autoConvertDelay) { [weak self] in
+            guard let self else { return }
+            KeyEvents.backspace(count: deleteCount) { [weak self] in
+                guard let self else { return }
+                KeyEvents.type(fullConvertedText, toRussian: toRussian) { [weak self] in
+                    guard let self else { return }
+                    self.isReplacing = false
+                    self.busy = false
+                    // Store undo info: double-Shift reverts this conversion.
+                    self.lastAutoConvertInfo = (
+                        original: originalText + boundaryChar,
+                        backspaceCount: fullConvertedText.count,
+                        undoToRussian: !toRussian,
+                        triggerWord: lastSegment.word
+                    )
+                }
+            }
+        }
+        return true
+    }
+
+    /// Reverts the last auto-conversion: switches back to the original layout,
+    /// backspaces the converted text, and retypes the original.
+    private func undoAutoConvert(_ info: (original: String, backspaceCount: Int, undoToRussian: Bool, triggerWord: String)) {
+        // Self-learning: add the trigger word to the exceptions list so it
+        // won't be auto-converted again (Caramba-style: undo = exception).
+        autoExceptions.insert(info.triggerWord)
+        UserDefaults.standard.set(Array(autoExceptions), forKey: "autoExceptions")
+        log("exception: added «\(redact(info.triggerWord))» (total: \(autoExceptions.count))")
+
+        guard LayoutSwitch.select(toRussian: info.undoToRussian) else {
+            log("undo: no target layout — skipping")
+            busy = false
+            return
+        }
+        isReplacing = true
+        typedBuffer = ""
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + Timing.layoutSwitchDelay) { [weak self] in
+            guard let self else { return }
+            KeyEvents.backspace(count: info.backspaceCount) { [weak self] in
+                guard let self else { return }
+                KeyEvents.type(info.original, toRussian: info.undoToRussian) { [weak self] in
+                    guard let self else { return }
+                    self.isReplacing = false
+                    self.busy = false
+                }
+            }
+        }
+    }
+
+    /// Parses the typing buffer into a list of (word, gap) segments.
+    /// Example: "f e ghbdtn" → [("f", " "), ("e", " "), ("ghbdtn", "")]
+    /// The gap is the boundary character(s) following each word.
+    private func parseBufferSegments() -> [(word: String, gap: String)] {
+        let buffer = typedBuffer
+        guard !buffer.isEmpty else { return [] }
+
+        var segments: [(word: String, gap: String)] = []
+        var i = buffer.startIndex
+
+        while i < buffer.endIndex {
+            // Skip leading boundary chars.
+            var wordStart = i
+            while wordStart < buffer.endIndex, AutoSwitcher.isBoundary(buffer[wordStart]) {
+                wordStart = buffer.index(after: wordStart)
+            }
+            guard wordStart < buffer.endIndex else { break }
+
+            // Find the word end (next boundary).
+            var wordEnd = wordStart
+            while wordEnd < buffer.endIndex, !AutoSwitcher.isBoundary(buffer[wordEnd]) {
+                wordEnd = buffer.index(after: wordEnd)
+            }
+            let word = String(buffer[wordStart..<wordEnd])
+
+            // Find the gap (boundary chars after the word).
+            var gapEnd = wordEnd
+            while gapEnd < buffer.endIndex, AutoSwitcher.isBoundary(buffer[gapEnd]) {
+                gapEnd = buffer.index(after: gapEnd)
+            }
+            let gap = String(buffer[wordEnd..<gapEnd])
+
+            segments.append((word: word, gap: gap))
+            i = gapEnd
+        }
+
+        return segments
+    }
+
     // MARK: - Conversion
 
     private func triggerSwitch() {
@@ -535,12 +784,21 @@ final class Switcher: NSObject {
     }
 
     private func performSwitch() {
-        defer { busy = false }
         log("switch: buffer «\(redact(typedBuffer))»")
 
         // Password field — do not touch at all.
         if secureField {
             log("switch: secure field — skipping")
+            busy = false
+            return
+        }
+
+        // Undo auto-convert: highest priority — double-Shift right after
+        // auto-convert reverts to the original text and layout.
+        if let info = lastAutoConvertInfo {
+            log("undo: reverting auto-convert")
+            lastAutoConvertInfo = nil
+            undoAutoConvert(info)
             return
         }
 
@@ -552,6 +810,7 @@ final class Switcher: NSObject {
                 log("toggle: undoing the last conversion (Cmd+Z)")
                 lastWasSelectionConvert = false
                 KeyEvents.undo()
+                busy = false
                 return
             }
             // 1b) Try to convert the selection via the clipboard.
@@ -568,7 +827,7 @@ final class Switcher: NSObject {
     /// Cmd+C → read the buffer → convert → Cmd+V (replaces the selection).
     /// If there is no selection or nothing to convert — toggles the layout.
     private func convertSelectionViaClipboard() {
-        guard !isReplacing else { return }
+        guard !isReplacing else { busy = false; return }
         isReplacing = true
 
         let pasteboard = NSPasteboard.general
@@ -577,7 +836,7 @@ final class Switcher: NSObject {
 
         KeyEvents.copySelection()
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + Timing.clipboardWait) { [weak self] in
             guard let self else { return }
             guard pasteboard.changeCount != beforeChange,
                   let text = pasteboard.string(forType: .string),
@@ -588,6 +847,7 @@ final class Switcher: NSObject {
                 self.log("selection(copy): nothing to copy/convert → toggle")
                 Clipboard.restore(saved)
                 self.isReplacing = false
+                self.busy = false
                 LayoutSwitch.toggle()
                 return
             }
@@ -596,9 +856,10 @@ final class Switcher: NSObject {
             LayoutSwitch.select(toRussian: result.direction == .toCyrillic)
             Clipboard.copy(result.converted)
             KeyEvents.paste()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Timing.clipboardRestore) {
                 Clipboard.restore(saved)
                 self.isReplacing = false
+                self.busy = false
             }
         }
     }
@@ -621,6 +882,7 @@ final class Switcher: NSObject {
         guard start < caret else {
             log("convert: empty fragment → toggle")
             LayoutSwitch.toggle()
+            busy = false
             return
         }
         let chunk = ns.substring(with: NSRange(location: start, length: caret - start))
@@ -629,6 +891,7 @@ final class Switcher: NSObject {
               result.converted != chunk else {
             log("convert: «\(chunk)» cannot be converted → toggle")
             LayoutSwitch.toggle()
+            busy = false
             return
         }
         log("convert: «\(redact(chunk))» → «\(redact(result.converted))»")
@@ -650,17 +913,20 @@ final class Switcher: NSObject {
 
     /// Switches the layout, erases deleteCount characters, types the text.
     private func replaceByDeleting(_ text: String, deleteCount: Int, toRussian: Bool) {
-        guard !isReplacing else { return }
+        guard !isReplacing else { busy = false; return }
         guard LayoutSwitch.select(toRussian: toRussian) else {
             log("replaceByDeleting: no target layout — leaving text as is")
+            busy = false
             return
         }
         isReplacing = true
         KeyEvents.backspace(count: deleteCount) { [weak self] in
             guard let self else { return }
             self.log("deleted \(deleteCount), typing «\(text)»")
-            KeyEvents.type(text, toRussian: toRussian) {
+            KeyEvents.type(text, toRussian: toRussian) { [weak self] in
+                guard let self else { return }
                 self.isReplacing = false
+                self.busy = false
             }
         }
     }

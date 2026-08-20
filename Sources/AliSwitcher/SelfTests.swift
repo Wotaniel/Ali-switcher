@@ -12,6 +12,7 @@ enum SelfTests {
         testTranslit()
         testChunkFinder()
         testTypingMap()
+        testAutoSwitcherEdgeCases()
 
         print("")
         print("— Result —")
@@ -154,5 +155,85 @@ enum SelfTests {
             }
         }
         check("знаки «\(symbols)» печатаемы", symbolsOK, "проблемные: \(bad)")
+    }
+
+    // MARK: - AutoSwitcher edge cases
+
+    private static func testAutoSwitcherEdgeCases() {
+        print("— AutoSwitcher: edge cases —")
+
+        // isMixedCase — функция-утилита. Больше НЕ блокирует конвертацию
+        // (spell-checker сам решает). Тесты проверяют корректность функции.
+        check("mixed-case «iPhone» → isMixedCase true",
+              AutoSwitcher.isMixedCase("iPhone"))
+        check("mixed-case «macOS» → isMixedCase true",
+              AutoSwitcher.isMixedCase("macOS"))
+        check("mixed-case «JavaScript» → isMixedCase true",
+              AutoSwitcher.isMixedCase("JavaScript"))
+        check("не mixed-case «hello»",
+              !AutoSwitcher.isMixedCase("hello"))
+        check("не mixed-case «HELLO» (all upper)",
+              !AutoSwitcher.isMixedCase("HELLO"))
+        // mixed-case «Hello» → не mixed-case (sentence case ≠ mixed-case)
+        check("не mixed-case «Hello» (sentence case)",
+              !AutoSwitcher.isMixedCase("Hello"))
+
+        // Digits in words
+        check("digits «iPhone15» содержит цифры",
+              AutoSwitcher.containsDigits("iPhone15"))
+        check("digits «3D» содержит цифры",
+              AutoSwitcher.containsDigits("3D"))
+        check("нет digits «hello»",
+              !AutoSwitcher.containsDigits("hello"))
+
+        // URLs and emails
+        check("URL «https://example.com» не конвертируется",
+              AutoSwitcher.isNonConvertible("https://example.com"))
+        check("URL «http://foo.bar» не конвертируется",
+              AutoSwitcher.isNonConvertible("http://foo.bar"))
+        check("URL «www.example.com» не конвертируется",
+              AutoSwitcher.isNonConvertible("www.example.com"))
+        check("email «foo@bar.com» не конвертируется",
+              AutoSwitcher.isNonConvertible("foo@bar.com"))
+        check("IP «127.0.0.1» не конвертируется",
+              AutoSwitcher.isNonConvertible("127.0.0.1"))
+        check("path «/usr/bin» не конвертируется",
+              AutoSwitcher.isNonConvertible("/usr/bin"))
+        check("path «~/Documents» не конвертируется",
+              AutoSwitcher.isNonConvertible("~/Documents"))
+        check("shell «$HOME» не конвертируется",
+              AutoSwitcher.isNonConvertible("$HOME"))
+        check("обычное слово «ghbdtn» конвертируется (не URL/email)",
+              !AutoSwitcher.isNonConvertible("ghbdtn"))
+
+        // CLI flags
+        check("flag «-rf» не конвертируется",
+              AutoSwitcher.isNonConvertible("-rf"))
+        check("flag «--verbose» не конвертируется",
+              AutoSwitcher.isNonConvertible("--verbose"))
+        check("flag «-l» не конвертируется",
+              AutoSwitcher.isNonConvertible("-l"))
+
+        // snake_case identifiers
+        check("underscore «my_var» содержит _",
+              AutoSwitcher.containsUnderscore("my_var"))
+        check("underscore «MAX_SIZE» содержит _",
+              AutoSwitcher.containsUnderscore("MAX_SIZE"))
+        check("нет underscore «hello»",
+              !AutoSwitcher.containsUnderscore("hello"))
+        check("snake_case «my_var_name» не конвертируется",
+              AutoSwitcher.isNonConvertible("my_var_name"))
+        check("обычное слово «привет» конвертируется (не URL/email)",
+              !AutoSwitcher.isNonConvertible("привет"))
+
+        // Domain detection: words that look like domains should match
+        check("domain «adguard.com» опознаётся как домен",
+              AutoSwitcher.matchesDomainPattern("adguard.com"))
+        check("domain «example.org» опознаётся как домен",
+              AutoSwitcher.matchesDomainPattern("example.org"))
+        check("domain «foo.bar» НЕ опознаётся (.bar не TLD)",
+              !AutoSwitcher.matchesDomainPattern("foo.bar"))
+        check("обычное слово «hello» НЕ домен",
+              !AutoSwitcher.matchesDomainPattern("hello"))
     }
 }

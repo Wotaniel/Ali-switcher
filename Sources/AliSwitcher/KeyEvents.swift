@@ -49,7 +49,7 @@ enum KeyEvents {
             return
         }
         post(keyCode: CGKeyCode(kVK_Delete), flags: [])
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.008) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + Timing.backspaceDelay) {
             backspaceNext(remaining: remaining - 1, completion: completion)
         }
     }
@@ -96,7 +96,7 @@ enum KeyEvents {
             return
         }
         // Pause before the first key: the app needs time to apply the new layout.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + Timing.layoutSwitchDelay) {
             typeNext(chars, index: 0, toRussian: toRussian, completion: completion)
         }
     }
@@ -112,7 +112,7 @@ enum KeyEvents {
         if let (keyCode, shift) = qwerty[source] {
             post(keyCode: keyCode, flags: shift ? [.maskShift] : [])
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + Timing.typeDelay) {
             typeNext(chars, index: index + 1, toRussian: toRussian, completion: completion)
         }
     }

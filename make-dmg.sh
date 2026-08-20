@@ -19,10 +19,15 @@ APP_SRC="build/AliSwitcher.app"
 VOL_NAME="AliSwitcher"
 BG_IMG="background.png"
 APP_BUNDLE_NAME="AliSwitcher.app"
-# Window 700x440; icons 128pt, left and right, vertically centered (y=186)
-WINDOW_LEFT=120; WINDOW_TOP=120; WINDOW_RIGHT=820; WINDOW_BOTTOM=560
+HELPER_SCRIPT="double-click-to-install.command"
+# Background image is 700x548, window is 50px taller (700x598) for the
+# helper-script row beneath the Applications alias. App and Applications
+# icons sit at the upper photo line; the helper script goes directly under
+# Applications (same X column, Y = APPS_Y + icon 128 + gap).
+WINDOW_LEFT=120; WINDOW_TOP=120; WINDOW_RIGHT=820; WINDOW_BOTTOM=718
 BUNDLE_X=170; BUNDLE_Y=186
 APPS_X=500; APPS_Y=186
+SCRIPT_X=500; SCRIPT_Y=430
 
 WORK=$(mktemp -d /tmp/aliswitcher-dmg.XXXXXX)
 trap 'rm -rf "$WORK"' EXIT
@@ -32,8 +37,8 @@ mkdir -p "$WORK/dmg/.background"
 cp -R "$APP_SRC" "$WORK/dmg/$APP_BUNDLE_NAME"
 # Helper script: double-click → copies to Applications, removes quarantine,
 # allows Gatekeeper, launches (for installs on other machines).
-cp double-click-to-install.command "$WORK/dmg/double-click-to-install.command"
-chmod +x "$WORK/dmg/double-click-to-install.command"
+cp double-click-to-install.command "$WORK/dmg/$HELPER_SCRIPT"
+chmod +x "$WORK/dmg/$HELPER_SCRIPT"
 if [ -f "Sources/background/$BG_IMG" ]; then
     cp "Sources/background/$BG_IMG" "$WORK/dmg/.background/$BG_IMG"
 else
@@ -72,6 +77,7 @@ tell application "Finder"
 		-- rearranging
 		set the position of item "Applications" to {$APPS_X, $APPS_Y}
 		set the position of item "$APP_BUNDLE_NAME" to {$BUNDLE_X, $BUNDLE_Y}
+		set the position of item "$HELPER_SCRIPT" to {$SCRIPT_X, $SCRIPT_Y}
 		-- updating and sleeping for 5 secs
 		update without registering applications
 		delay 5

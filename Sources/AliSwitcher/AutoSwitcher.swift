@@ -47,6 +47,16 @@ enum AutoSwitcher {
         return try! NSRegularExpression(pattern: combined, options: [])
     }()
 
+    /// Checks if a 1-character word converts to a letter of the other script.
+    /// Used in retroactive mode: if we already know the user was typing in
+    /// the wrong layout, a single char that converts is also wrong.
+    /// Universal — no hardcoded word list, works for any letter.
+    static func isSingleCharConvertible(_ word: String) -> Bool {
+        guard word.count == 1 else { return false }
+        guard let result = Translit.convert(word), result.converted != word else { return false }
+        return result.converted.count == 1 && result.converted.first!.isLetter
+    }
+
     /// Is this character a word boundary?
     static func isBoundary(_ ch: Character) -> Bool {
         boundaries.contains(ch) || ch.isWhitespace
@@ -103,6 +113,154 @@ enum AutoSwitcher {
         return domainRegex.firstMatch(in: text, options: [], range: range) != nil
     }
 
+    /// A learned word pair: stores both forms so it works bidirectionally.
+    /// - Exception: do NOT auto-convert this pair (learned from undo)
+    /// - Dictionary: ALWAYS auto-convert this pair (learned from manual convert)
+    struct LearnedWord {
+        let formA: String       // e.g. "мд"
+        let formB: String       // e.g. "vl"
+        let isException: Bool   // true = block, false = force
+    }
+
+    /// Unified list of learned word pairs.
+    /// Replaces the old autoExceptions + customDictionary.
+    /// Loaded/saved by Switcher from UserDefaults["learnedWords"].
+    static var learnedWords: [LearnedWord] = []
+
+    /// Parses a typing buffer into (word, gap) segments.
+    /// Example: "f e ghbdtn" → [("f", " "), ("e", " "), ("ghbdtn", "")]
+    /// The gap is the boundary character(s) following each word.
+    /// Pure function — no instance state, safe to call from tests.
+    static func parseBufferSegments(_ buffer: String) -> [(word: String, gap: String)] {
+        guard !buffer.isEmpty else { return [] }
+
+        var segments: [(word: String, gap: String)] = []
+        var i = buffer.startIndex
+
+        while i < buffer.endIndex {
+            // Skip leading boundary chars.
+            var wordStart = i
+            while wordStart < buffer.endIndex, isBoundary(buffer[wordStart]) {
+                wordStart = buffer.index(after: wordStart)
+            }
+            guard wordStart < buffer.endIndex else { break }
+
+            // Find the word end (next boundary).
+            var wordEnd = wordStart
+            while wordEnd < buffer.endIndex, !isBoundary(buffer[wordEnd]) {
+                wordEnd = buffer.index(after: wordEnd)
+            }
+            let word = String(buffer[wordStart..<wordEnd])
+
+            // Find the gap (boundary chars after the word).
+            var gapEnd = wordEnd
+            while gapEnd < buffer.endIndex, isBoundary(buffer[gapEnd]) {
+                gapEnd = buffer.index(after: gapEnd)
+            }
+            let gap = String(buffer[wordEnd..<gapEnd])
+
+            segments.append((word: word, gap: gap))
+            i = gapEnd
+        }
+
+        return segments
+    }
+
+    /// Result of evaluating auto-convert: the decision to convert (or not).
+    /// Pure data — no side effects. The caller (Switcher) performs the actual
+    /// backspace/type/layout-switch.
+    struct AutoConvertDecision {
+        let convertedText: String       // text to type (without boundary char)
+        let fullConvertedText: String  // text to type (with boundary char)
+        let deleteCount: Int           // chars to backspace
+        let direction: SwitchDirection
+        let triggerWord: String        // word that triggered conversion
+        let originalText: String       // pre-conversion text (for undo)
+        let wordCount: Int             // number of words converted (retroactive)
+    }
+
+    /// Evaluates whether the buffer should be auto-converted on a word boundary.
+    /// Pure function — returns a decision or nil (no conversion needed).
+    /// This is the EXACT same logic as Switcher.tryAutoConvert, extracted so
+    /// tests can call the real code path instead of reimplementing it.
+    static func evaluateAutoConvert(
+        buffer: String,
+        boundaryChar: String
+    ) -> AutoConvertDecision? {
+        let segments = parseBufferSegments(buffer)
+
+        // The last segment's word is what we check first.
+        // Special case: 1-char words are allowed if they convert to a letter
+        // of the other script (universal — not limited to prepositions).
+        guard let lastSegment = segments.last,
+              lastSegment.word.count >= minWordLength
+                || isSingleCharConvertible(lastSegment.word) else {
+            return nil
+        }
+
+        // Skip words in the exceptions list (learned from previous undos).
+        // Only blocks the original trigger direction (formA).
+        if let learned = lookupLearned(lastSegment.word),
+           learned.isException, lastSegment.word == learned.formA {
+            return nil
+        }
+
+        // For single-char prepositions, use minLength: 1 so shouldConvert
+        // doesn't reject them. Normal words use the default minWordLength.
+        let minLen = lastSegment.word.count == 1 ? 1 : minWordLength
+        guard let result = shouldConvert(lastSegment.word, minLength: minLen) else { return nil }
+
+        // Retroactive: walk backwards from the last word and convert all previous
+        // words that are also in the wrong layout (same direction).
+        var convertedText = result.converted
+        var deleteCount = lastSegment.word.count
+
+        var wordIndex = segments.count - 2
+        while wordIndex >= 0 {
+            let prevSeg = segments[wordIndex]
+            let gap = segments[wordIndex].gap
+            if let prevResult = shouldConvert(prevSeg.word, minLength: 1),
+               prevResult.direction == result.direction {
+                convertedText = prevResult.converted + gap + convertedText
+                deleteCount += prevSeg.word.count + gap.count
+                wordIndex -= 1
+            } else {
+                break  // Stop — this word is not in the wrong layout.
+            }
+        }
+
+        // Compute the original text (pre-conversion) for undo support.
+        var originalText = ""
+        for segIdx in (wordIndex + 1)..<segments.count {
+            originalText += segments[segIdx].word + segments[segIdx].gap
+        }
+        let fullConvertedText = convertedText + boundaryChar
+
+        return AutoConvertDecision(
+            convertedText: convertedText,
+            fullConvertedText: fullConvertedText,
+            deleteCount: deleteCount,
+            direction: result.direction,
+            triggerWord: lastSegment.word,
+            originalText: originalText,
+            wordCount: segments.count - wordIndex - 1
+        )
+    }
+
+    /// Checks if a word matches any learned pair.
+    /// Prioritizes formA matches (directional: the word the user typed).
+    /// This ensures exceptions block only the original direction.
+    /// e.g. exception «мд⇄vl» blocks «мд» (formA) but lets «vl» (formB)
+    /// fall through to a dictionary entry or spell-checker.
+    static func lookupLearned(_ word: String) -> LearnedWord? {
+        // First: exact formA match (the word the user originally typed).
+        if let match = learnedWords.first(where: { $0.formA == word }) {
+            return match
+        }
+        // Second: formB match (reverse direction).
+        return learnedWords.first(where: { $0.formB == word })
+    }
+
     /// Determines whether a word was typed in the wrong layout.
     /// Returns the converted text + direction if auto-conversion is needed.
     ///
@@ -151,6 +309,32 @@ enum AutoSwitcher {
         // 4) Must be convertible
         guard let result = Translit.convert(word) else { return nil }
         guard result.converted != word else { return nil }
+
+        // 4a) Learned words (unified list):
+        // - Exception (formA match) → block: user undid this auto-convert before.
+        //   Only blocks the ORIGINAL trigger word (formA). The reverse (formB)
+        //   is NOT blocked — it falls through to spell-checker or dictionary.
+        //   e.g. undoing «мд»→«vl» blocks «мд» from auto-converting,
+        //   but «vl»→«мд» still works (may match a dictionary entry or pass spell-check).
+        // - Dictionary (either form) → force convert (skip spell-checker).
+        if let learned = lookupLearned(word) {
+            if learned.isException && word == learned.formA {
+                return nil  // user undid this conversion before — don't repeat
+            } else if !learned.isException {
+                return result  // user manually converted this before — force it
+            }
+            // Exception with formB match → fall through to spell-checker
+        }
+
+        // 4b) Single-char words in retroactive mode (minLength == 1):
+        // If we already know the user was typing in the wrong layout
+        // (retroactive walk triggered by a multi-char word), any single char
+        // that converts to a letter of the other script is also wrong.
+        // Universal — no hardcoded word list. NSSpellChecker rejects single
+        // letters as "invalid", so we bypass it here.
+        if word.count == 1, minLength <= 1 {
+            return result
+        }
 
         // 5–6) Spell-check both directions
         let checker = NSSpellChecker.shared

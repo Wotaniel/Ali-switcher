@@ -116,4 +116,15 @@ enum KeyEvents {
             typeNext(chars, index: index + 1, toRussian: toRussian, completion: completion)
         }
     }
+
+    /// Replays buffered characters after replacement. Same as type() but
+    /// without the initial layoutSwitchDelay — the layout is already set.
+    static func replay(_ text: String, toRussian: Bool, completion: (() -> Void)? = nil) {
+        let chars = Array(text)
+        guard !chars.isEmpty else {
+            completion?()
+            return
+        }
+        typeNext(chars, index: 0, toRussian: toRussian, completion: completion)
+    }
 }

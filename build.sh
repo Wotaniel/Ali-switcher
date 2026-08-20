@@ -15,7 +15,13 @@ swiftc --version >/dev/null 2>&1 || { echo "✗ No working swiftc. Install a too
 
 mkdir -p build
 
+# Read version from VERSION file (default: 1.0.0)
+VERSION=$(cat VERSION 2>/dev/null | tr -d '[:space:]')
+: "${VERSION:=1.0.0}"
+echo "▸ Version: $VERSION"
+
 # Icon (in build/ — not part of the signature)
+# make-icon.sh won't overwrite existing PNG (preserves custom icons).
 ./make-icon.sh
 
 # Build dir outside iCloud
@@ -34,7 +40,7 @@ cp "$STAGE/AliSwitcher" "$STAGE/app/Contents/MacOS/AliSwitcher"
 cp build/AliSwitcher.icns "$STAGE/app/Contents/Resources/AliSwitcher.icns"
 cp uninstall.sh "$STAGE/app/Contents/Resources/uninstall.sh"
 
-cat > "$STAGE/app/Contents/Info.plist" <<'PLIST'
+cat > "$STAGE/app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -50,9 +56,9 @@ cat > "$STAGE/app/Contents/Info.plist" <<'PLIST'
     <key>CFBundlePackageType</key>
         <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-        <string>1.0.0</string>
+        <string>$VERSION</string>
     <key>CFBundleVersion</key>
-        <string>1</string>
+        <string>$VERSION</string>
     <key>CFBundleIconFile</key>
         <string>AliSwitcher</string>
     <key>LSMinimumSystemVersion</key>

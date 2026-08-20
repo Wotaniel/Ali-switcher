@@ -37,8 +37,11 @@ guard let tiff = image.tiffRepresentation,
 try! png.write(to: URL(fileURLWithPath: "build/icon-1024.png"))
 SWIFT
 
-swiftc -O -swift-version 5 "$ICON_SWIFT" -o build/makeicon
-build/makeicon
+# Only generate PNG if it doesn't exist (preserves custom icons).
+if [ ! -f build/icon-1024.png ]; then
+    swiftc -O -swift-version 5 "$ICON_SWIFT" -o build/makeicon
+    build/makeicon
+fi
 
 rm -rf build/icon.iconset
 mkdir -p build/icon.iconset

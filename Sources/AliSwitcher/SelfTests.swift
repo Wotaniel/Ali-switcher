@@ -396,20 +396,13 @@ enum SelfTests {
         let d3v = AutoSwitcher.evaluateAutoConvert(buffer: "в", boundaryChar: " ")
         check("integ: «в»+space → NO auto-convert (builtin RU)", d3v == nil)
         let d3b = AutoSwitcher.evaluateAutoConvert(buffer: "b", boundaryChar: " ")
-        check("integ: «b»+space → NO auto-convert (single-char toCyrillic blocked)", d3b == nil)
-        // «Ш» → «I»: single-char toLatin ALLOWED
+        check("integ: «b»+space → NO auto-convert (single-char blocked)", d3b == nil)
+        // ALL single-char auto-convert triggers blocked — no exceptions.
+        // «Ш» → «I» only works via manual double-Shift (Translit.convert).
         let d3sh = AutoSwitcher.evaluateAutoConvert(buffer: "Ш", boundaryChar: " ")
-        check("integ: «Ш»+space → auto-convert (single-char toLatin)", d3sh != nil)
-        check("integ: «Ш»+space → «I»", d3sh?.convertedText == "I")
+        check("integ: «Ш»+space → NO auto-convert (single-char blocked)", d3sh == nil)
         let d3shl = AutoSwitcher.evaluateAutoConvert(buffer: "ш", boundaryChar: " ")
-        check("integ: «ш»+space → auto-convert (single-char toLatin)", d3shl != nil)
-        check("integ: «ш»+space → «i»", d3shl?.convertedText == "i")
-        // Cycle prevention: «I» after «Ш»→«I» → blocked
-        let d3cycle = AutoSwitcher.evaluateAutoConvert(
-            buffer: "I", boundaryChar: " ",
-            recentAutoConvertedWords: [(original: "Ш", converted: "I")]
-        )
-        check("integ: «I»+space after Ш→I → blocked (cycle prevention)", d3cycle == nil)
+        check("integ: «ш»+space → NO auto-convert (single-char blocked)", d3shl == nil)
 
         // --- Scenario 4: retroactive — "f e ghbdtn" + space ---
         // After "ghbdtn" triggers conversion, retroactive walk
@@ -640,7 +633,8 @@ enum SelfTests {
               AutoSwitcher.shouldConvert("привет", minLength: 1, isRetroactive: true) == nil)
 
         // --- Scenario 34: single-char toLatin in shouldConvert ---
-        // shouldConvert allows single-char toLatin (for retroactive in auto-switch).
+        // shouldConvert allows single-char toLatin in retroactive mode
+        // (when a multi-char word already proved wrong layout).
         check("shouldConvert: «Ш» (minLen:1) → «I»",
               AutoSwitcher.shouldConvert("Ш", minLength: 1)?.converted == "I")
         check("shouldConvert: «ш» (minLen:1) → «i»",
@@ -648,17 +642,13 @@ enum SelfTests {
         check("shouldConvert: «I» (minLen:1, retro) → «Ш»",
               AutoSwitcher.shouldConvert("I", minLength: 1, isRetroactive: true)?.converted == "Ш")
 
-        // --- Scenario 35: single-char toLatin auto-convert (Ш→I) ---
-        // Auto-convert now allows single-char toLatin triggers.
-        // Cycle prevention: I after Ш→I is blocked.
+        // --- Scenario 35: single-char auto-convert ALWAYS blocked ---
+        // Auto-convert never triggers on single-char words — not enough signal.
+        // «Ш» → «I» only works via manual double-Shift (Translit.convert).
         let d35sh = AutoSwitcher.evaluateAutoConvert(buffer: "Ш", boundaryChar: " ")
-        check("integ: «Ш»+space → auto-convert (single-char toLatin)", d35sh != nil)
-        check("integ: «Ш»+space → «I»", d35sh?.convertedText == "I")
-        let d35cycle = AutoSwitcher.evaluateAutoConvert(
-            buffer: "I", boundaryChar: " ",
-            recentAutoConvertedWords: [(original: "Ш", converted: "I")]
-        )
-        check("integ: «I»+space after Ш→I → blocked (cycle)", d35cycle == nil)
+        check("integ: «Ш»+space → NO auto-convert (single-char blocked)", d35sh == nil)
+        let d35i = AutoSwitcher.evaluateAutoConvert(buffer: "I", boundaryChar: " ")
+        check("integ: «I»+space → NO auto-convert (single-char blocked)", d35i == nil)
 
         // Restore state
         AutoSwitcher.enWords = savedEN

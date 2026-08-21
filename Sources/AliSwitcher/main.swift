@@ -415,10 +415,8 @@ final class Switcher {
 
         // Delegate to the pure function (shared with tests).
         // This ensures the real code path and test code path are identical.
-        // Pass recentAutoConvertedWords for single-char cycle prevention.
         guard let decision = AutoSwitcher.evaluateAutoConvert(
-            buffer: state.typedBuffer, boundaryChar: boundaryChar,
-            recentAutoConvertedWords: state.recentAutoConvertedWords
+            buffer: state.typedBuffer, boundaryChar: boundaryChar
         ) else {
             return false
         }

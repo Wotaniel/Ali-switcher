@@ -234,48 +234,26 @@ enum AutoSwitcher {
     /// tests can call the real code path instead of reimplementing it.
     static func evaluateAutoConvert(
         buffer: String,
-        boundaryChar: String,
-        recentAutoConvertedWords: [(original: String, converted: String)] = []
+        boundaryChar: String
     ) -> AutoConvertDecision? {
         let segments = parseBufferSegments(buffer)
 
         // The last segment's word is what we check first.
-        // Multi-char words: always eligible (minWordLength = 2).
-        // Single-char words: only .toLatin (Cyrillic→Latin), e.g. «Ш» → «I».
-        //   Single-char .toCyrillic (Latin→Cyrillic) is blocked because the
-        //   user typed one key in the wrong layout accidentally — not enough
-        //   signal. Retroactive single-char toCyrillic still works (when a
-        //   multi-char word already proved wrong layout).
-        // Cycle prevention for single-char toLatin: the caller passes
-        // recentAutoConvertedWords; if the word matches a recently converted
-        // result (e.g. «I» after «Ш»→«I» auto-convert), it's blocked.
-        guard let lastSegment = segments.last else { return nil }
-        let isSingleChar = lastSegment.word.count < minWordLength
-        if isSingleChar, lastSegment.word.count != 1 { return nil }
+        // ONLY multi-char words can trigger auto-convert (minWordLength = 2).
+        // Single-char auto-convert is NEVER triggered — not enough signal,
+        // and creates false positives (й→q, ц→w…). Single chars are still
+        // converted RETROACTIVELY (when a multi-char word proved wrong layout).
+        guard let lastSegment = segments.last,
+              lastSegment.word.count >= minWordLength else {
+            return nil
+        }
 
         // Skip words in the exceptions list (learned from previous undos).
         if isLearnedException(lastSegment.word) {
             return nil
         }
 
-        // For single-char: check if this word is a recent auto-convert result.
-        // If so, it's part of a cycle (Ш→I→Ш→I…) — block it.
-        if isSingleChar {
-            let word = lastSegment.word
-            let isCycleStart = recentAutoConvertedWords.contains { $0.converted == word }
-            if isCycleStart { return nil }
-            // Also check if single-char Translit.convert would even work.
-            guard let prelim = Translit.convert(lastSegment.word),
-                  prelim.direction == .toLatin else { return nil }
-        }
-
-        // shouldConvert with minLength: 1 for single-char, default for multi-char.
-        let ml = isSingleChar ? 1 : minWordLength
-        guard let result = shouldConvert(lastSegment.word, minLength: ml, isRetroactive: false) else { return nil }
-
-        // Single-char toCyrillic triggers blocked (not enough signal).
-        // Retroactive single-char toCyrillic still works (multi-char trigger).
-        if isSingleChar, result.direction == .toCyrillic { return nil }
+        guard let result = shouldConvert(lastSegment.word, isRetroactive: false) else { return nil }
 
         // Retroactive: walk backwards from the last word and convert all previous
         // words that are also in the wrong layout (same direction).

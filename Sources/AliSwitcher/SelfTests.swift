@@ -298,6 +298,31 @@ enum SelfTests {
               AutoSwitcher.shouldConvert("в", minLength: 1) == nil)
         check("retroactive: «и» → shouldConvert(minLength:1) → nil (valid RU)",
               AutoSwitcher.shouldConvert("и", minLength: 1) == nil)
+        // CYRILLIC → LATIN: allowed for non-builtin Russian chars
+        check("retroactive: «Ш» → shouldConvert(minLength:1) → «I»",
+              AutoSwitcher.shouldConvert("Ш", minLength: 1)?.converted == "I")
+        check("retroactive: «ш» → shouldConvert(minLength:1) → «i»",
+              AutoSwitcher.shouldConvert("ш", minLength: 1)?.converted == "i")
+        check("retroactive: «ъ» → shouldConvert(minLength:1) → «]»",
+              AutoSwitcher.shouldConvert("ъ", minLength: 1)?.converted == "]")
+
+        // Non-letter characters: Translit.convert must handle them
+        check("translit: «[» → «х» (non-letter in map)",
+              Translit.convert("[")?.converted == "х")
+        check("translit: «]» → «ъ» (non-letter in map)",
+              Translit.convert("]")?.converted == "ъ")
+        check("translit: «'» → «э» (non-letter in map)",
+              Translit.convert("'")?.converted == "э")
+        check("translit: «;» → «ж» (non-letter in map)",
+              Translit.convert(";")?.converted == "ж")
+        check("translit: ««» → nil (not in any map)",
+              Translit.convert("«") == nil)
+        check("translit: «I» → «Ш» (uppercase)",
+              Translit.convert("I")?.converted == "Ш")
+        check("translit: «i» → «ш» (lowercase)",
+              Translit.convert("i")?.converted == "ш")
+        check("translit: «Ш» → «I» (uppercase reverse)",
+              Translit.convert("Ш")?.converted == "I")
 
         // Restore state
         AutoSwitcher.enWords = savedEN

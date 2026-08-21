@@ -446,7 +446,7 @@ final class UIManager: NSObject, NSWindowDelegate {
 
     /// Permissions guide window: does not close on button presses until
     /// «Done» (both settings sections can be opened).
-    func showPermissionsGuide() {
+    @objc func showPermissionsGuide() {
         if let panel = permissionsPanel {
             NSApp.setActivationPolicy(.regular)
             NSRunningApplication.current.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])

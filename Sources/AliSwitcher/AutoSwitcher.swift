@@ -247,12 +247,17 @@ enum AutoSwitcher {
         // Latin), single chars like "а", "в", "и" are valid Russian words and
         // must NOT be auto-converted to English ("f", "d", "b").
         // NSSpellChecker considers all single letters "valid" in both
-        // languages, so direction is the only way to distinguish intent.
+        // languages, so direction + builtin check is the way to distinguish intent.
+        // Latin → Cyrillic: always allowed (e.g. "f" → "а").
+        // Cyrillic → Latin: allowed only if NOT a builtin Russian word
+        // (e.g. "Ш" → "I" is OK, but "а" → "f" is blocked).
         // Multi-char words always go through the full spell-checker.
         guard let lastSegment = segments.last,
               lastSegment.word.count >= minWordLength
                 || (isSingleCharConvertible(lastSegment.word)
-                    && Translit.convert(lastSegment.word)?.direction == .toCyrillic) else {
+                    && (Translit.convert(lastSegment.word)?.direction == .toCyrillic
+                        || (Translit.convert(lastSegment.word)?.direction == .toLatin
+                            && !isBuiltinWord(lastSegment.word)))) else {
             return nil
         }
 
@@ -403,18 +408,22 @@ enum AutoSwitcher {
             return nil  // user undid this conversion before — don't repeat
         }
 
-        // 4c) Single-char words in retroactive mode (minLength == 1):
-        // If we already know the user was typing in the wrong layout
-        // (retroactive walk triggered by a multi-char word), any single char
-        // that converts to a letter of the other script is also wrong —
-        // BUT ONLY in the toCyrillic direction (Latin → Russian).
-        // In the toLatin direction (Russian → Latin), single chars like «а»,
-        // «в», «и» are valid Russian words and must NOT be converted.
+        // 4c) Single-char words (minLength == 1):
+        // Latin → Russian (toCyrillic): always allowed (user typed English
+        // meaning Russian, e.g. «f» → «а»).
+        // Russian → Latin (toLatin): allowed ONLY for non-builtin Russian
+        // chars. Common Russian single-char words («а», «в», «и», «к», «о»,
+        // «с», «у», «я») must NOT be converted to Latin. But «Ш» → «I»
+        // should work because Ш alone is not a Russian word.
         if word.count == 1, minLength <= 1 {
             if result.direction == .toCyrillic {
                 return result
             }
-            return nil  // Don't convert single Russian letters to Latin
+            // Russian → Latin: allow if NOT a builtin Russian word
+            if !isBuiltinWord(word) {
+                return result
+            }
+            return nil
         }
 
         // 5–6) Spell-check both directions

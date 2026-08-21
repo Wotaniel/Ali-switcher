@@ -60,7 +60,23 @@ enum Translit {
                 if isCyrillic(ch) { cyrillic += 1 } else { latin += 1 }
             }
         }
-        guard cyrillic > 0 || latin > 0 else { return nil }
+        guard cyrillic > 0 || latin > 0 else {
+            // No letters — but characters like [, ], ', ; are on different keys
+            // in RU vs EN layouts. Check if any character is in a translit map.
+            for ch in text {
+                if enToRu[ch] != nil {
+                    // English-layout character (e.g. '[' → 'х')
+                    let converted = String(text.map { enToRu[$0] ?? $0 })
+                    return (converted, .toCyrillic)
+                }
+                if ruToEn[ch] != nil {
+                    // Russian-layout character (e.g. '.' → '/')
+                    let converted = String(text.map { ruToEn[$0] ?? $0 })
+                    return (converted, .toLatin)
+                }
+            }
+            return nil
+        }
 
         let toLatin = cyrillic >= latin
         let map: [Character: Character] = toLatin ? ruToEn : enToRu

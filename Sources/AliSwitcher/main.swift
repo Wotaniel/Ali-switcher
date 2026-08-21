@@ -397,8 +397,10 @@ final class Switcher {
 
         // Delegate to the pure function (shared with tests).
         // This ensures the real code path and test code path are identical.
+        // Pass recentAutoConvertedWords for single-char cycle prevention.
         guard let decision = AutoSwitcher.evaluateAutoConvert(
-            buffer: state.typedBuffer, boundaryChar: boundaryChar
+            buffer: state.typedBuffer, boundaryChar: boundaryChar,
+            recentAutoConvertedWords: state.recentAutoConvertedWords
         ) else {
             return false
         }
@@ -612,10 +614,13 @@ final class Switcher {
     /// (from real field text if Accessibility is available, otherwise from the buffer),
     /// erase it with Backspaces and retype the converted text.
     ///
-    /// Per-word conversion: only words that shouldConvert confirms are in the
-    /// wrong layout (misspelled in own language + valid in other language) get
-    /// converted. Words that are valid in their own language are left as-is.
-    /// This prevents converting an entire buffer when only one word is wrong.
+    /// Manual double-Shift conversion logic (NO dictionary checks):
+    /// 1. Last word: ALWAYS convert (user explicitly wants this converted).
+    /// 2. Previous words: convert if same layout direction AND not a valid
+    ///    word in its own language (misspelled = typed in wrong layout).
+    ///    Stop at first valid word — it was typed intentionally.
+    /// No builtin/exception/spell-check on converted result — those are
+    /// ONLY for auto-switch.
     private func convertTypedText() {
         let ns: NSString
         if let real = realTextBeforeCaret(), !real.isEmpty {
@@ -642,50 +647,60 @@ final class Switcher {
             return
         }
 
-        // Parse into words and convert only the ones in the wrong layout.
         let segments = AutoSwitcher.parseBufferSegments(chunk)
-
-        var convertedParts: [String] = []
-        var anyConverted = false
-        var convertedDirection: SwitchDirection?
-
-        for seg in segments {
-            let wordSeg = seg.word.isEmpty ? "" : seg.word
-            let gapSeg = seg.gap
-
-            if wordSeg.isEmpty {
-                // Only boundary chars — keep as-is.
-                convertedParts.append(gapSeg)
-                continue
-            }
-
-            // Check if this word should be converted.
-            // minLength=1: allow single-char conversions (Ш→I, f→а).
-            // isRetroactive=true: skip builtins, allow single-char toLatin.
-            if let result = AutoSwitcher.shouldConvert(wordSeg, minLength: 1, isRetroactive: true) {
-                convertedParts.append(result.converted + gapSeg)
-                anyConverted = true
-                if convertedDirection == nil {
-                    convertedDirection = result.direction
-                }
-            } else {
-                // Word is valid in its own language — leave as-is.
-                convertedParts.append(wordSeg + gapSeg)
-            }
-        }
-
-        guard anyConverted, let direction = convertedDirection else {
-            log("convert: no words need conversion → toggle")
+        guard let lastSeg = segments.last, !lastSeg.word.isEmpty,
+              let lastResult = Translit.convert(lastSeg.word),
+              lastResult.converted != lastSeg.word else {
+            log("convert: «\(redact(chunk))» last word cannot be converted → toggle")
             LayoutSwitch.toggle()
             state.busy = false
             return
         }
 
-        let convertedText = convertedParts.joined()
-        let deleteCount = chunk.count
-        log("convert: «\(redact(chunk))» → «\(redact(convertedText))» (per-word)")
-        replaceByDeleting(convertedText,
-                          deleteCount: deleteCount,
+        let direction = lastResult.direction
+
+        // Build converted text. Last word is always converted (no checks).
+        var convertedText = lastResult.converted + lastSeg.gap
+
+        // Retroactive walk: convert previous words if:
+        // - Same direction as last word (wrong layout)
+        // - Misspelled in own language (not a valid word → typed by mistake)
+        // Stop at first valid word — natural boundary.
+        let checker = NSSpellChecker.shared
+        let origLang = direction == .toCyrillic ? "en" : "ru"
+
+        var wordIndex = segments.count - 2
+        while wordIndex >= 0 {
+            let prevSeg = segments[wordIndex]
+            let gap = prevSeg.gap
+            if prevSeg.word.isEmpty { wordIndex -= 1; continue }
+            guard let prevResult = Translit.convert(prevSeg.word),
+                  prevResult.direction == direction,
+                  prevResult.converted != prevSeg.word else { break }
+            // Is the original word a valid word in its own language?
+            // If yes → typed intentionally → stop the walk.
+            let origMisspelled = checker.checkSpelling(
+                of: prevSeg.word, startingAt: 0,
+                language: origLang, wrap: false,
+                inSpellDocumentWithTag: 0, wordCount: nil
+            ).location != NSNotFound
+            guard origMisspelled else { break }
+            convertedText = prevResult.converted + gap + convertedText
+            wordIndex -= 1
+        }
+
+        // Prefix: unchanged words before the converted portion (stays in field).
+        var prefix = ""
+        var i = 0
+        while i <= wordIndex {
+            prefix += segments[i].word + segments[i].gap
+            i += 1
+        }
+
+        let fullText = prefix + convertedText
+        log("convert: «\(redact(chunk))» → «\(redact(fullText))» (manual, last word forced)")
+        replaceByDeleting(fullText,
+                          deleteCount: chunk.count,
                           toRussian: direction == .toCyrillic)
     }
 

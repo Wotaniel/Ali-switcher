@@ -28,6 +28,12 @@ final class SwitcherState {
     var isReplacingSince: CFTimeInterval = 0
     static let isReplacingTimeout: CFTimeInterval = 3.0
 
+    /// Generation token for async callback invalidation (BUG #4/#5 fix).
+    /// Incremented on every invalidation event (timeout force-reset, .reset
+    /// during isReplacing). Every async callback captures the generation at
+    /// start and checks before modifying state — stale callbacks become no-ops.
+    var generation: UInt64 = 0
+
     /// True once the event tap is active (permissions granted).
     var tapActive = false
 

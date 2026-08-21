@@ -650,6 +650,51 @@ enum SelfTests {
         let d35i = AutoSwitcher.evaluateAutoConvert(buffer: "I", boundaryChar: " ")
         check("integ: «I»+space → NO auto-convert (single-char blocked)", d35i == nil)
 
+        // --- Scenario 36: KeyEvents.isFullyTypeable (BUG #2 fix) ---
+        // KeyEvents.type() types in ONE layout. isFullyTypeable checks whether
+        // the text can be correctly typed in that layout. If not → clipboard.
+        check("typeable: «привет» (toRussian) → true",
+              KeyEvents.isFullyTypeable("привет", toRussian: true))
+        check("typeable: «hello» (toEnglish) → true",
+              KeyEvents.isFullyTypeable("hello", toRussian: false))
+        check("typeable: «привет world» (toRussian) → false (Latin in Russian)",
+              !KeyEvents.isFullyTypeable("привет world", toRussian: true))
+        check("typeable: «привет world» (toEnglish) → false (Cyrillic in English)",
+              !KeyEvents.isFullyTypeable("привет world", toRussian: false))
+        check("typeable: emoji → false (no QWERTY key)",
+              !KeyEvents.isFullyTypeable("привет😀", toRussian: true))
+        check("typeable: «привет.» (toRussian) → true (period is typeable)",
+              KeyEvents.isFullyTypeable("привет.", toRussian: true))
+        check("typeable: empty string → true",
+              KeyEvents.isFullyTypeable("", toRussian: true))
+
+        // --- Scenario 37: Leading boundary chars (BUG #1 fix) ---
+        // parseBufferSegments drops leading boundary chars from segments.
+        // deleteCount must subtract them: chunk.count - leadingBoundaryCount.
+        // Without this fix, " abc" → deleteCount=4 → eats the space.
+        let segs37 = AutoSwitcher.parseBufferSegments(" abc")
+        check("boundary: « abc» → 1 segment (leading space dropped)", segs37.count == 1)
+        check("boundary: « abc» → word «abc»", segs37.first?.word == "abc")
+        let chunk37 = " abc"
+        let leading37 = chunk37.prefix(while: { AutoSwitcher.isBoundary($0) }).count
+        check("boundary: « abc» → leadingBoundaryCount 1", leading37 == 1)
+        check("boundary: « abc» → deleteCount 3 (not 4)", chunk37.count - leading37 == 3)
+        // Multiple leading boundaries: "  abc" → 2 leading spaces
+        let chunk37b = "  abc"
+        let leading37b = chunk37b.prefix(while: { AutoSwitcher.isBoundary($0) }).count
+        check("boundary: «  abc» → leadingBoundaryCount 2", leading37b == 2)
+        check("boundary: «  abc» → deleteCount 3 (not 5)", chunk37b.count - leading37b == 3)
+        // No leading boundary: "abc" → 0 leading
+        let chunk37c = "abc"
+        let leading37c = chunk37c.prefix(while: { AutoSwitcher.isBoundary($0) }).count
+        check("boundary: «abc» → leadingBoundaryCount 0", leading37c == 0)
+        check("boundary: «abc» → deleteCount 3", chunk37c.count - leading37c == 3)
+        // Leading period (from ChunkFinder chunk): ".abc"
+        let chunk37d = ".abc"
+        let leading37d = chunk37d.prefix(while: { AutoSwitcher.isBoundary($0) }).count
+        check("boundary: «.abc» → leadingBoundaryCount 1", leading37d == 1)
+        check("boundary: «.abc» → deleteCount 3 (not 4)", chunk37d.count - leading37d == 3)
+
         // Restore state
         AutoSwitcher.enWords = savedEN
         AutoSwitcher.ruWords = savedRU

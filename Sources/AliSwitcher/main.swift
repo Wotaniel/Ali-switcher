@@ -234,6 +234,7 @@ final class Switcher {
                 state.isReplacing = false
                 state.busy = false
                 state.pendingCharacters = ""
+                state.generation &+= 1  // BUG #4 fix: invalidate in-flight callbacks
             }
         }
 
@@ -265,6 +266,7 @@ final class Switcher {
                         // Enter, Tab, arrows, Home/End — let them through.
                         // Blocking navigation keys makes the keyboard feel dead.
                         state.pendingCharacters = ""
+                        state.generation &+= 1  // BUG #5 fix: invalidate stale completion
                     case .ignore:
                         // Escape, function keys, Cmd combos — let them through.
                         // These don't affect the text buffer position.
@@ -428,6 +430,7 @@ final class Switcher {
 
         state.busy = true
         state.isReplacing = true; state.isReplacingSince = CFAbsoluteTimeGetCurrent()
+        let gen = state.generation  // BUG #4/#5: capture for async callback validation
         guard LayoutSwitch.select(toRussian: toRussian) else {
             log("auto: no target layout — skipping")
             state.busy = false
@@ -444,6 +447,7 @@ final class Switcher {
                     guard let self else { return }
                     self.state.isReplacing = false
                     self.state.busy = false
+                    guard self.state.generation == gen else { return }  // stale — skip state write
                     self.replayPendingKeystrokes()
                     // Store undo info: double-Shift reverts this conversion.
                     self.state.lastAutoConvertInfo = (
@@ -469,18 +473,21 @@ final class Switcher {
     /// Reverts the last auto-conversion: switches back to the original layout,
     /// backspaces the converted text, and retypes the original.
     private func undoAutoConvert(_ info: (original: String, backspaceCount: Int, undoToRussian: Bool, triggerWord: String)) {
-        // Self-learning: add the trigger word to exceptions so it
-        // won't be auto-converted again (Caramba-style: undo = exception).
-        if state.autoLearnExceptions {
-            learnException(info.triggerWord)
-        }
-
         guard LayoutSwitch.select(toRussian: info.undoToRussian) else {
             log("undo: no target layout — skipping")
             state.busy = false
             return
         }
+        // Self-learning: add the trigger word to exceptions so it
+        // won't be auto-converted again (Caramba-style: undo = exception).
+        // BUG #3 fix: AFTER LayoutSwitch guard — if the layout switch fails,
+        // the undo didn't happen, so we must NOT learn the exception
+        // (would block future auto-converts for a word that wasn't actually undone).
+        if state.autoLearnExceptions {
+            learnException(info.triggerWord)
+        }
         state.isReplacing = true; state.isReplacingSince = CFAbsoluteTimeGetCurrent()
+        let gen = state.generation  // BUG #4/#5: capture for async callback validation
         state.typedBuffer = ""
 
         DispatchQueue.main.asyncAfter(deadline: .now() + Timing.layoutSwitchDelay) { [weak self] in
@@ -491,6 +498,7 @@ final class Switcher {
                     guard let self else { return }
                     self.state.isReplacing = false
                     self.state.busy = false
+                    guard self.state.generation == gen else { return }  // stale — skip state write
                     self.replayPendingKeystrokes()
                 }
             }
@@ -575,6 +583,7 @@ final class Switcher {
     private func convertSelectionViaClipboard() {
         guard !state.isReplacing else { state.busy = false; return }
         state.isReplacing = true; state.isReplacingSince = CFAbsoluteTimeGetCurrent()
+        let gen = state.generation  // BUG #4/#5: capture for async callback validation
 
         let pasteboard = NSPasteboard.general
         let beforeChange = pasteboard.changeCount
@@ -584,6 +593,11 @@ final class Switcher {
 
         DispatchQueue.main.asyncAfter(deadline: .now() + Timing.clipboardWait) { [weak self] in
             guard let self else { return }
+            guard self.state.generation == gen else {  // stale — abort + cleanup
+                self.state.isReplacing = false
+                self.state.busy = false
+                return
+            }
             guard pasteboard.changeCount != beforeChange,
                   let text = pasteboard.string(forType: .string),
                   !text.isEmpty,
@@ -625,11 +639,13 @@ final class Switcher {
             LayoutSwitch.select(toRussian: result.direction == .toCyrillic)
             Clipboard.copy(result.converted)
             KeyEvents.paste()
-            DispatchQueue.main.asyncAfter(deadline: .now() + Timing.clipboardRestore) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Timing.clipboardRestore) { [weak self] in
+                guard let self else { return }
                 Clipboard.restore(saved)
-                self.state.typedBuffer = ""  // Clear stale buffer after clipboard conversion
                 self.state.isReplacing = false
                 self.state.busy = false
+                guard self.state.generation == gen else { return }  // stale — skip state write
+                self.state.typedBuffer = ""  // Clear stale buffer after clipboard conversion
                 self.replayPendingKeystrokes()
             }
         }
@@ -702,6 +718,10 @@ final class Switcher {
             guard let prevResult = Translit.convert(prevSeg.word),
                   prevResult.direction == direction,
                   prevResult.converted != prevSeg.word else { break }
+            // Block single-char toLatin in retroactive walk (same as auto-convert).
+            // Prevents cycles like О→J→О→J… and false positives (single Cyrillic
+            // letter → QWERTY key, e.g. й→q is rarely the user's intent).
+            if prevSeg.word.count == 1, prevResult.direction == .toLatin { break }
             // Is the original word a valid word in its own language?
             // If yes → typed intentionally → stop the walk.
             let origMisspelled = checker.checkSpelling(
@@ -725,18 +745,25 @@ final class Switcher {
         let fullText = prefix + convertedText
         log("convert: «\(redact(chunk))» → «\(redact(fullText))» (manual, last word forced)")
 
-        // Check if the text has mixed scripts (both Cyrillic and Latin letters).
-        // If so, KeyEvents.type() can't handle it (it types in one layout).
-        // Use clipboard paste instead — it handles any Unicode text.
-        let hasCyrillic = fullText.contains { Translit.isCyrillic($0) }
-        let hasLatin = fullText.contains { $0.isLetter && !Translit.isCyrillic($0) }
-        if hasCyrillic && hasLatin {
-            log("convert: mixed script → clipboard paste")
-            replaceByClipboard(fullText, deleteCount: chunk.count)
-        } else {
+        // BUG #1 fix: parseBufferSegments drops leading boundary chars (space,
+        // period) from segments — but they're still part of chunk and are
+        // already in the field. If we delete chunk.count chars, we eat one
+        // extra boundary char per leading boundary → data loss.
+        let leadingBoundaryCount = chunk.prefix(while: { AutoSwitcher.isBoundary($0) }).count
+        let deleteCount = chunk.count - leadingBoundaryCount
+
+        // BUG #2 fix: universal typeability pre-check. KeyEvents.type() can
+        // only type chars with QWERTY key mappings. Emoji, diacritics, and
+        // other non-QWERTY chars would be silently dropped. If ANY char
+        // can't be typed → use clipboard paste (handles any Unicode).
+        let toRussian = direction == .toCyrillic
+        if KeyEvents.isFullyTypeable(fullText, toRussian: toRussian) {
             replaceByDeleting(fullText,
-                              deleteCount: chunk.count,
-                              toRussian: direction == .toCyrillic)
+                              deleteCount: deleteCount,
+                              toRussian: toRussian)
+        } else {
+            log("convert: non-typeable chars → clipboard paste")
+            replaceByClipboard(fullText, deleteCount: deleteCount)
         }
     }
 
@@ -760,6 +787,7 @@ final class Switcher {
             return
         }
         state.isReplacing = true; state.isReplacingSince = CFAbsoluteTimeGetCurrent()
+        let gen = state.generation  // BUG #4/#5: capture for async callback validation
         KeyEvents.backspace(count: deleteCount) { [weak self] in
             guard let self else { return }
             log("deleted \(deleteCount), typing «\(text)»")
@@ -767,6 +795,7 @@ final class Switcher {
                 guard let self else { return }
                 self.state.isReplacing = false
                 self.state.busy = false
+                guard self.state.generation == gen else { return }  // stale — skip state write
                 // Replace buffer with converted text → second double-Shift
                 // converts back (toggle) instead of repeating the same conversion.
                 self.state.typedBuffer = text
@@ -782,16 +811,19 @@ final class Switcher {
     private func replaceByClipboard(_ text: String, deleteCount: Int) {
         guard !state.isReplacing else { state.busy = false; return }
         state.isReplacing = true; state.isReplacingSince = CFAbsoluteTimeGetCurrent()
+        let gen = state.generation  // BUG #4/#5: capture for async callback validation
         let saved = Clipboard.snapshot()
         KeyEvents.backspace(count: deleteCount) { [weak self] in
             guard let self else { return }
             log("deleted \(deleteCount), pasting «\(text)» via clipboard")
             Clipboard.copy(text)
             KeyEvents.paste()
-            DispatchQueue.main.asyncAfter(deadline: .now() + Timing.clipboardRestore) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Timing.clipboardRestore) { [weak self] in
+                guard let self else { return }
                 Clipboard.restore(saved)
                 self.state.isReplacing = false
                 self.state.busy = false
+                guard self.state.generation == gen else { return }  // stale — skip state write
                 self.state.typedBuffer = text
                 self.state.lastWasSelectionConvert = false
                 self.replayPendingKeystrokes()

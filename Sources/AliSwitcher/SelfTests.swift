@@ -550,8 +550,12 @@ enum SelfTests {
         check("shouldConvert: «is» (primary) → nil", AutoSwitcher.shouldConvert("is") == nil)
         // Russian builtins
         check("shouldConvert: «что» (primary) → nil", AutoSwitcher.shouldConvert("что") == nil)
-        check("shouldConvert: «юае» (primary) → nil", AutoSwitcher.shouldConvert("юае") == nil)
-        check("shouldConvert: «она» (primary) → nil", AutoSwitcher.shouldConvert("она") == nil)
+        check("shouldConvert: «он» (primary) → nil", AutoSwitcher.shouldConvert("он") == nil)
+        check("shouldConvert: «все» (primary) → nil", AutoSwitcher.shouldConvert("все") == nil)
+        check("shouldConvert: «уже» (primary) → nil", AutoSwitcher.shouldConvert("уже") == nil)
+        check("shouldConvert: «all» (primary) → nil", AutoSwitcher.shouldConvert("all") == nil)
+        check("shouldConvert: «any» (primary) → nil", AutoSwitcher.shouldConvert("any") == nil)
+        check("shouldConvert: «man» (primary) → nil", AutoSwitcher.shouldConvert("man") == nil)
 
         // --- Scenario 27: builtins retroactive ARE converted ---
         check("shouldConvert: «I» (retroactive) → «Ш»", AutoSwitcher.shouldConvert("I", minLength: 1, isRetroactive: true)?.converted == "Ш")
@@ -563,12 +567,16 @@ enum SelfTests {
 
         // --- Scenario 29: builtin lists cover common words ---
         check("builtin: «the» is builtin", AutoSwitcher.isBuiltinWord("the"))
-        check("builtin: «is» is builtin", AutoSwitcher.isBuiltinWord("is"))
-        check("builtin: «I» is builtin", AutoSwitcher.isBuiltinWord("I"))
-        check("builtin: «что» is builtin", AutoSwitcher.isBuiltinWord("что"))
-        check("builtin: «юае» is builtin", AutoSwitcher.isBuiltinWord("юае"))
-        check("builtin: «f» is NOT builtin", !AutoSwitcher.isBuiltinWord("f"))
-        check("builtin: «ghbdtn» is NOT builtin", !AutoSwitcher.isBuiltinWord("ghbdtn"))
+        check("builtin: «юае» is NOT builtin (garbage removed)", !AutoSwitcher.isBuiltinWord("юае"))
+        check("builtin: «она» is builtin", AutoSwitcher.isBuiltinWord("она"))
+        check("builtin: «он» is builtin", AutoSwitcher.isBuiltinWord("он"))
+        check("builtin: «все» is builtin", AutoSwitcher.isBuiltinWord("все"))
+        check("builtin: «уже» is builtin", AutoSwitcher.isBuiltinWord("уже"))
+        check("builtin: «ила» is NOT builtin (garbage removed)", !AutoSwitcher.isBuiltinWord("ила"))
+        check("builtin: «теё» is NOT builtin (garbage removed)", !AutoSwitcher.isBuiltinWord("теё"))
+        check("builtin: «all» is builtin", AutoSwitcher.isBuiltinWord("all"))
+        check("builtin: «any» is builtin", AutoSwitcher.isBuiltinWord("any"))
+        check("builtin: «man» is builtin", AutoSwitcher.isBuiltinWord("man"))
 
         // --- Scenario 30: multi-char retroactive does NOT convert valid words ---
         // "by" is a valid English word (and a builtin). In retroactive mode,

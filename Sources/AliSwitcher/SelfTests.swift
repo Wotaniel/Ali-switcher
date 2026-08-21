@@ -156,6 +156,21 @@ enum SelfTests {
             }
         }
         check("знаки «\(symbols)» печатаемы", symbolsOK, "проблемные: \(bad)")
+
+        // ALL 26 uppercase Latin letters must be typeable.
+        // Bug fix: I, J, K, L, M, N, O, P, U were missing from the qwerty map,
+        // causing characters to be silently eaten during uppercase conversion
+        // (e.g. «ГЗВ» → «UPD» only typed «D» because U and P were skipped).
+        let upperLetters: [Character] = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        var upperOK = true
+        var upperBad: [Character] = []
+        for ch in upperLetters {
+            if !KeyEvents.canType(ch) {
+                upperOK = false
+                upperBad.append(ch)
+            }
+        }
+        check("all 26 uppercase Latin letters typeable", upperOK, "missing: \(upperBad)")
     }
 
     // MARK: - AutoSwitcher edge cases

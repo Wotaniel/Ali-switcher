@@ -74,7 +74,10 @@ enum KeyEvents {
         "H": (4, true), "G": (5, true), "Z": (6, true), "X": (7, true),
         "C": (8, true), "V": (9, true), "B": (11, true), "Q": (12, true),
         "W": (13, true), "E": (14, true), "R": (15, true), "Y": (16, true),
-        "T": (17, true), "!": (18, true), "@": (19, true), "#": (20, true),
+        "T": (17, true), "O": (31, true), "U": (32, true), "I": (34, true),
+        "P": (35, true), "L": (37, true), "J": (38, true), "K": (40, true),
+        "N": (45, true), "M": (46, true),
+        "!": (18, true), "@": (19, true), "#": (20, true),
         "$": (21, true), "^": (22, true), "%": (23, true), "+": (24, true),
         "(": (25, true), "&": (26, true), "_": (27, true), "*": (28, true),
         ")": (29, true), "}": (30, true), "{": (33, true), "|": (42, true),
@@ -111,6 +114,8 @@ enum KeyEvents {
         let source: Character = (toRussian ? Translit.enOnSameKey(ch) : nil) ?? ch
         if let (keyCode, shift) = qwerty[source] {
             post(keyCode: keyCode, flags: shift ? [.maskShift] : [])
+        } else {
+            log("⚠  typeNext: cannot type «\(ch)» (source «\(source)» not in qwerty map)")
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + Timing.typeDelay) {
             typeNext(chars, index: index + 1, toRussian: toRussian, completion: completion)

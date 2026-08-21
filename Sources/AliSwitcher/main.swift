@@ -225,6 +225,18 @@ final class Switcher {
     // MARK: - Event handling
 
     private func handle(event: CGEvent, type: CGEventType) -> Unmanaged<CGEvent>? {
+        // Safety: force-reset isReplacing if stuck for too long.
+        // This prevents the keyboard from being permanently blocked.
+        if state.isReplacing {
+            let now = CFAbsoluteTimeGetCurrent()
+            if now - state.isReplacingSince > SwitcherState.isReplacingTimeout {
+                log("⚠  isReplacing stuck for \(Int(now - state.isReplacingSince))s — force reset")
+                state.isReplacing = false
+                state.busy = false
+                state.pendingCharacters = ""
+            }
+        }
+
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap = currentTap {
                 CGEvent.tapEnable(tap: tap, enable: true)
@@ -245,15 +257,21 @@ final class Switcher {
                     switch action {
                     case .text(let s):
                         state.pendingCharacters.append(s)
+                        return nil  // swallow printable chars — replayed after
                     case .deleteBackward:
                         if !state.pendingCharacters.isEmpty { state.pendingCharacters.removeLast() }
+                        return nil  // swallow backspace — adjusted in buffer
                     case .reset:
+                        // Enter, Tab, arrows, Home/End — let them through.
+                        // Blocking navigation keys makes the keyboard feel dead.
                         state.pendingCharacters = ""
                     case .ignore:
+                        // Escape, function keys, Cmd combos — let them through.
+                        // These don't affect the text buffer position.
                         break
                     }
                 }
-                return nil  // swallow — replayed after replacement
+                // .reset and .ignore pass through to the app.
             }
             // Selection toggle reset — only on real user keystrokes.
             // Our own synthetic Cmd+C/Cmd+V/Cmd+Z (privateState) don't count.
@@ -411,7 +429,7 @@ final class Switcher {
         let fullConvertedText = decision.fullConvertedText
 
         state.busy = true
-        state.isReplacing = true
+        state.isReplacing = true; state.isReplacingSince = CFAbsoluteTimeGetCurrent()
         guard LayoutSwitch.select(toRussian: toRussian) else {
             log("auto: no target layout — skipping")
             state.busy = false
@@ -464,7 +482,7 @@ final class Switcher {
             state.busy = false
             return
         }
-        state.isReplacing = true
+        state.isReplacing = true; state.isReplacingSince = CFAbsoluteTimeGetCurrent()
         state.typedBuffer = ""
 
         DispatchQueue.main.asyncAfter(deadline: .now() + Timing.layoutSwitchDelay) { [weak self] in
@@ -558,7 +576,7 @@ final class Switcher {
     /// If there is no selection or nothing to convert — toggles the layout.
     private func convertSelectionViaClipboard() {
         guard !state.isReplacing else { state.busy = false; return }
-        state.isReplacing = true
+        state.isReplacing = true; state.isReplacingSince = CFAbsoluteTimeGetCurrent()
 
         let pasteboard = NSPasteboard.general
         let beforeChange = pasteboard.changeCount
@@ -743,7 +761,7 @@ final class Switcher {
             state.busy = false
             return
         }
-        state.isReplacing = true
+        state.isReplacing = true; state.isReplacingSince = CFAbsoluteTimeGetCurrent()
         KeyEvents.backspace(count: deleteCount) { [weak self] in
             guard let self else { return }
             log("deleted \(deleteCount), typing «\(text)»")
@@ -765,7 +783,7 @@ final class Switcher {
     /// and can't be typed in a single layout.
     private func replaceByClipboard(_ text: String, deleteCount: Int) {
         guard !state.isReplacing else { state.busy = false; return }
-        state.isReplacing = true
+        state.isReplacing = true; state.isReplacingSince = CFAbsoluteTimeGetCurrent()
         let saved = Clipboard.snapshot()
         KeyEvents.backspace(count: deleteCount) { [weak self] in
             guard let self else { return }

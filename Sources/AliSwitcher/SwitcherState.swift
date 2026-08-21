@@ -23,6 +23,11 @@ final class SwitcherState {
     /// are buffered in `pendingCharacters` and replayed after.
     var isReplacing = false
 
+    /// Safety timeout: if isReplacing is true for longer than this, force-reset.
+    /// Prevents keyboard from being permanently stuck if a completion never fires.
+    var isReplacingSince: CFTimeInterval = 0
+    static let isReplacingTimeout: CFTimeInterval = 3.0
+
     /// True once the event tap is active (permissions granted).
     var tapActive = false
 

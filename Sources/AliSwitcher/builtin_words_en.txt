@@ -119,4 +119,4 @@ eg
 etc
 ex
 ie
-vs
+# vs removed: converts to «мы» which is in RU list — keep only RU variant

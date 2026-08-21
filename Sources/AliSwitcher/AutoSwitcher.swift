@@ -268,6 +268,14 @@ enum AutoSwitcher {
             let gap = segments[wordIndex].gap
             if let prevResult = shouldConvert(prevSeg.word, minLength: 1, isRetroactive: true),
                prevResult.direction == result.direction {
+                // Block single-char toLatin in auto-convert retroactive walk.
+                // Prevents cycles like О→J→О→J… when auto-convert encounters
+                // a single Cyrillic char during the backwards walk.
+                // (Manual double-Shift is unaffected — it uses shouldConvert
+                // with isRetroactive=true and allows single-char toLatin.)
+                if prevSeg.word.count == 1, prevResult.direction == .toLatin {
+                    break
+                }
                 convertedText = prevResult.converted + gap + convertedText
                 deleteCount += prevSeg.word.count + gap.count
                 wordIndex -= 1
@@ -393,18 +401,13 @@ enum AutoSwitcher {
         }
 
         // 4c) Single-char words (minLength == 1, retroactive only):
-        // Latin → Cyrillic (toCyrillic): allowed (e.g. «f» → «а»).
-        // Cyrillic → Latin (toLatin): BLOCKED — creates cycles and false
-        // positives (e.g. «О» → «J» → «О» → «J»…). Single-char triggers
-        // are also blocked in evaluateAutoConvert, so this only affects
-        // retroactive checks where the main word proved wrong layout.
-        // Manual conversion (double-Shift) is NOT affected — it uses
-        // Translit.convert directly without shouldConvert checks.
+        // Both directions allowed for manual double-Shift (convertTypedText).
+        // Auto-mode blocks single-char .toLatin in evaluateAutoConvert's
+        // retroactive walk to prevent cycles (О→J→О→J…).
+        // Builtins are skipped in retroactive (step 4a), so «а», «в», «и» etc.
+        // still won't convert — but «Ш» → «I» works.
         if word.count == 1, minLength <= 1 {
-            if result.direction == .toCyrillic {
-                return result
-            }
-            return nil
+            return result
         }
 
         // 5–6) Spell-check both directions

@@ -611,6 +611,11 @@ final class Switcher {
     /// Main path: find the "typed in the wrong layout" fragment
     /// (from real field text if Accessibility is available, otherwise from the buffer),
     /// erase it with Backspaces and retype the converted text.
+    ///
+    /// Per-word conversion: only words that shouldConvert confirms are in the
+    /// wrong layout (misspelled in own language + valid in other language) get
+    /// converted. Words that are valid in their own language are left as-is.
+    /// This prevents converting an entire buffer when only one word is wrong.
     private func convertTypedText() {
         let ns: NSString
         if let real = realTextBeforeCaret(), !real.isEmpty {
@@ -630,18 +635,58 @@ final class Switcher {
             return
         }
         let chunk = ns.substring(with: NSRange(location: start, length: caret - start))
-        guard !chunk.isEmpty,
-              let result = Translit.convert(chunk),
-              result.converted != chunk else {
-            log("convert: «\(chunk)» cannot be converted → toggle")
+        guard !chunk.isEmpty else {
+            log("convert: empty chunk → toggle")
             LayoutSwitch.toggle()
             state.busy = false
             return
         }
-        log("convert: «\(redact(chunk))» → «\(redact(result.converted))»")
-        replaceByDeleting(result.converted,
-                          deleteCount: chunk.count,
-                          toRussian: result.direction == .toCyrillic)
+
+        // Parse into words and convert only the ones in the wrong layout.
+        let segments = AutoSwitcher.parseBufferSegments(chunk)
+
+        var convertedParts: [String] = []
+        var anyConverted = false
+        var convertedDirection: SwitchDirection?
+
+        for seg in segments {
+            let wordSeg = seg.word.isEmpty ? "" : seg.word
+            let gapSeg = seg.gap
+
+            if wordSeg.isEmpty {
+                // Only boundary chars — keep as-is.
+                convertedParts.append(gapSeg)
+                continue
+            }
+
+            // Check if this word should be converted.
+            // minLength=1: allow single-char conversions (Ш→I, f→а).
+            // isRetroactive=true: skip builtins, allow single-char toLatin.
+            if let result = AutoSwitcher.shouldConvert(wordSeg, minLength: 1, isRetroactive: true) {
+                convertedParts.append(result.converted + gapSeg)
+                anyConverted = true
+                if convertedDirection == nil {
+                    convertedDirection = result.direction
+                }
+            } else {
+                // Word is valid in its own language — leave as-is.
+                convertedParts.append(wordSeg + gapSeg)
+            }
+        }
+
+        guard anyConverted, let direction = convertedDirection else {
+            log("convert: no words need conversion → toggle")
+            LayoutSwitch.toggle()
+            state.busy = false
+            return
+        }
+
+        let convertedText = convertedParts.joined()
+        let deleteCount = chunk.count
+        log("convert: «\(redact(chunk))» → «\(redact(convertedText))» (per-word)")
+        replaceByDeleting(convertedText,
+                          deleteCount: deleteCount,
+                          toRussian: direction == .toCyrillic)
     }
 
     /// The field text before the caret (if Accessibility is available).

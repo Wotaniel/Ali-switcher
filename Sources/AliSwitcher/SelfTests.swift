@@ -313,14 +313,16 @@ enum SelfTests {
               AutoSwitcher.shouldConvert("в", minLength: 1) == nil)
         check("retroactive: «и» → shouldConvert(minLength:1) → nil (valid RU)",
               AutoSwitcher.shouldConvert("и", minLength: 1) == nil)
-        // CYRILLIC → LATIN: NOT allowed for single chars (creates cycles).
-        // Manual double-Shift still converts these via Translit.convert directly.
-        check("retroactive: «Ш» → shouldConvert(minLength:1) → nil (toLatin blocked)",
-              AutoSwitcher.shouldConvert("Ш", minLength: 1) == nil)
-        check("retroactive: «ш» → shouldConvert(minLength:1) → nil (toLatin blocked)",
-              AutoSwitcher.shouldConvert("ш", minLength: 1) == nil)
-        check("retroactive: «ъ» → shouldConvert(minLength:1) → nil (toLatin blocked)",
-              AutoSwitcher.shouldConvert("ъ", minLength: 1) == nil)
+        // CYRILLIC → LATIN: allowed for single chars (manual double-Shift).
+        // «Ш» → «I», «ш» → «i» — user typed Russian in English context.
+        // Auto-convert blocks single-char toLatin in evaluateAutoConvert's
+        // retroactive walk (not here) to prevent cycles.
+        check("retroactive: «Ш» → shouldConvert(minLength:1) → «I»",
+              AutoSwitcher.shouldConvert("Ш", minLength: 1)?.converted == "I")
+        check("retroactive: «ш» → shouldConvert(minLength:1) → «i»",
+              AutoSwitcher.shouldConvert("ш", minLength: 1)?.converted == "i")
+        check("retroactive: «ъ» → shouldConvert(minLength:1) → «]»",
+              AutoSwitcher.shouldConvert("ъ", minLength: 1)?.converted == "]")
 
         // Non-letter characters: Translit.convert must handle them
         check("translit: «[» → «х» (non-letter in map)",
@@ -602,6 +604,49 @@ enum SelfTests {
         check("integ: «by ghbdtn» → converts «ghbdtn» only (by is valid EN)", d31 != nil)
         check("integ: «by ghbdtn» → «привет» (retroactive stopped at «by»)", d31?.convertedText == "привет")
         check("integ: «by ghbdtn» → wordCount 1", d31?.wordCount == 1)
+
+        // --- Scenario 32: per-word shouldConvert on mixed buffer ---
+        // Simulates the convertTypedText per-word logic:
+        // Each word in the buffer is checked independently.
+        // Valid words are left alone, only misspelled ones convert.
+        // Buffer: "привет как оно работа" — all valid Russian, none should convert.
+        let parts32 = AutoSwitcher.parseBufferSegments("привет как оно работа")
+        var anyConvert32 = false
+        for seg32 in parts32 {
+            if !seg32.word.isEmpty {
+                if AutoSwitcher.shouldConvert(seg32.word, minLength: 1, isRetroactive: true) != nil {
+                    anyConvert32 = true
+                }
+            }
+        }
+        check("per-word: «привет как оно работа» → no conversion needed", !anyConvert32)
+
+        // --- Scenario 33: per-word shouldConvert picks only wrong-layout words ---
+        // Buffer: "ghbdtn как оно" — "ghbdtn" is wrong (→ привет), rest valid Russian.
+        let parts33 = AutoSwitcher.parseBufferSegments("ghbdtn как оно")
+        var converted33: [String] = []
+        var anyConvert33 = false
+        for seg33 in parts33 {
+            if seg33.word.isEmpty { converted33.append(seg33.gap); continue }
+            if let r = AutoSwitcher.shouldConvert(seg33.word, minLength: 1, isRetroactive: true) {
+                converted33.append(r.converted + seg33.gap)
+                anyConvert33 = true
+            } else {
+                converted33.append(seg33.word + seg33.gap)
+            }
+        }
+        check("per-word: «ghbdtn как оно» → some converted", anyConvert33)
+        check("per-word: result contains «привет»", converted33.joined().contains("привет"))
+        check("per-word: result keeps «как»", converted33.joined().contains("как"))
+        check("per-word: result keeps «оно»", converted33.joined().contains("оно"))
+
+        // --- Scenario 34: single-char toLatin allowed for manual (shouldConvert) ---
+        check("shouldConvert: «Ш» (minLen:1) → «I» (manual OK)",
+              AutoSwitcher.shouldConvert("Ш", minLength: 1)?.converted == "I")
+        check("shouldConvert: «ш» (minLen:1) → «i» (manual OK)",
+              AutoSwitcher.shouldConvert("ш", minLength: 1)?.converted == "i")
+        check("shouldConvert: «I» (minLen:1, retro) → «Ш» (manual OK)",
+              AutoSwitcher.shouldConvert("I", minLength: 1, isRetroactive: true)?.converted == "Ш")
 
         // Restore state
         AutoSwitcher.enWords = savedEN

@@ -8,7 +8,7 @@ AliSwitcher — macOS layout switcher (RU↔EN only). Mini-analog of Punto/Caram
 
 ```bash
 ./build.sh                                    # Build → build/AliSwitcher.app
-build/AliSwitcher.app/Contents/MacOS/AliSwitcher --test   # 160 self-tests
+build/AliSwitcher.app/Contents/MacOS/AliSwitcher --test   # 232 self-tests
 ditto build/AliSwitcher.app /Applications/AliSwitcher.app # Deploy
 killall AliSwitcher; open /Applications/AliSwitcher.app   # Restart
 ./make-dmg.sh                                 # Build DMG installer → dist/AliSwitcher.dmg
@@ -38,20 +38,22 @@ killall AliSwitcher; open /Applications/AliSwitcher.app   # Restart
 - Builds in `/tmp` to avoid iCloud FileProvider corrupting signatures
 - macOS 13+, uses swiftly toolchain if available
 
-## Source files (10)
+## Source files (12)
 
 | File | Responsibility |
 |---|---|
-| `main.swift` | App, CGEventTap, performSwitch, tryAutoConvert, undoAutoConvert, Timing enum, menu, word list editors |
-| `AutoSwitcher.swift` | shouldConvert, isNonConvertible, matchesDomainPattern, builtin words (EN+RU), two word lists (enWords/ruWords), boundaries |
-| `KeyEvents.swift` | Synthetic key posting: backspace, type, copySelection, paste, undo |
+| `main.swift` | App lifecycle, CGEventTap, handle(), performSwitch, tryAutoConvert, undoAutoConvert, convertTypedText, Timing enum |
+| `SwitcherState.swift` | Shared mutable state: busy, isReplacing, typedBuffer, generation (token), lastAutoConvertInfo, pendingCharacters |
+| `UIManager.swift` | Menu bar, status icon, permissions panel, word list editors, autostart prompt |
+| `AutoSwitcher.swift` | findConversionRange (unified), evaluateAutoConvert, shouldConvert, parseBufferSegments, builtin words (EN+RU), two word lists (enWords/ruWords), boundaries |
+| `KeyEvents.swift` | Synthetic key posting: backspace, type, isFullyTypeable, canType, copySelection, paste, undo, replay |
 | `KeyTracker.swift` | UCKeyTranslate, Action enum (.text/.deleteBackward/.reset/.ignore) |
 | `Translit.swift` | ЙЦУКЕН↔QWERTY map, convert, isCyrillic, enOnSameKey |
 | `ChunkFinder.swift` | UTF-16 script boundary detection (cyrillic↔latin) |
 | `LayoutSwitch.swift` | TISSelectInputSource, currentIsRussian, toggle |
 | `Accessibility.swift` | AXUIElement, focusedElement, secureField, selectedText, selectedRange |
 | `Clipboard.swift` | ClipboardSnapshot, copy, restore |
-| `SelfTests.swift` | `--test` flag, 160 tests |
+| `SelfTests.swift` | `--test` flag, 232 tests |
 
 ## Critical patterns
 
@@ -62,17 +64,23 @@ killall AliSwitcher; open /Applications/AliSwitcher.app   # Restart
 - **Lesson recorded**: `/memories/repo/ali-switcher-huge-fuckup-toggle.md`
 
 ### `typedBuffer` state (stale buffer = broken spaces)
-- After `replaceByDeleting`: `typedBuffer = text` (replaced with converted text → toggle works)
+- After `replaceByDeleting`: `typedBuffer = text`, `typedBufferIsFromConversion = true` (replaced with converted text → toggle works)
 - After `convertSelectionViaClipboard`: `typedBuffer = ""` (cleared)
+- New typing clears buffer if `typedBufferIsFromConversion` is true — prevents stale converted text polluting the next fragment
 - Stale buffer → auto-convert fires on wrong data → blocks space key permanently
 
 ### `performSwitch` priority order
 1. `secureField` → skip
-2. `lastAutoConvertInfo` → `undoAutoConvert` (backspace + retype original)
+2. `lastAutoConvertInfo` (if set) + `!hasNewText` → `undoAutoConvert` (backspace + retype original). If `hasNewText` → clear info, fall through to convert
 3. AX selection (non-empty) → `convertSelectionViaClipboard` (ALWAYS clipboard, even if buffer not empty)
 4. `lastWasSelectionConvert` + buffer empty → `KeyEvents.undo()` (Cmd+Z toggle)
 5. Buffer not empty → `convertTypedText` (backspace + retype)
 6. Fallback → `convertSelectionViaClipboard`
+
+### Generation token (BUG #4/#5 fix)
+- `state.generation: UInt64` — incremented on timeout force-reset and `.reset` during isReplacing
+- Every async callback captures `gen` at start, checks `state.generation == gen` before modifying state
+- Stale callbacks become no-ops — prevents race conditions when timeout fires mid-conversion
 
 ### Two independent word lists
 
@@ -101,8 +109,18 @@ Direction is **implicit in the word's script** (alphabet). Two simple `Set<Strin
 5. **4c) Single-char retroactive** → only `.toCyrillic` (Latin→Russian), NOT `.toLatin`
 6. **5–6) Spell-checker** (NSSpellChecker): orig must be misspelled + converted must be valid
 
+### `findConversionRange` — unified conversion algorithm
+- Shared between auto-convert (`isManual: false`) and manual double-Shift (`isManual: true`)
+- **Last word**: ALWAYS converts (no checks for manual; `shouldConvert` for auto)
+- **Retroactive walk**: previous words convert if same script + misspelled in own language
+- **Auto-only checks** in retroactive: exceptions block, converted must be valid in target language, builtins SKIPPED (retroactive mode)
+- **Manual-only**: no builtins, no exceptions, no convValid — user explicitly asked to convert
+- **Single-char words**: convert in retroactive (size doesn't matter). In auto: single-char toLatin BLOCKED in trigger, but works in retroactive
+- Returns `ConversionPlan` with: prefix, originalText, convertedText, lastGap, deleteCount, direction
+
 ### Auto-learn exceptions
 - `autoLearnExceptions` (default ON): undoing auto-convert adds word to `enWords` or `ruWords` via `learnException(_:)`
+- `learnException` called AFTER `LayoutSwitch.select` guard — if layout switch fails, word NOT added (BUG #3 fix)
 - Works for both `undoAutoConvert` (double-Shift undo) and `convertSelectionViaClipboard` (selection undo)
 - Word lists persisted in `UserDefaults["enWords"]` and `UserDefaults["ruWords"]` as `[String]` (one word per element)
 - Menu: "Auto-Learn Exceptions" toggle + "English Words…" + "Russian Words…" editors

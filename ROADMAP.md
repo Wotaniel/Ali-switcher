@@ -24,7 +24,11 @@
 | Автозапуск при входе | ✅ Готово |
 | DMG-инсталлер | ✅ Готово |
 | Self-signed cert (права переживают пересборки) | ✅ Готово |
-| 160 self-tests | ✅ Готово |
+| 232 self-tests (findConversionRange, типiability, boundary math) | ✅ Готово |
+| Рефакторинг: UIManager + SwitcherState извлечены из main.swift | ✅ Готово |
+| Generation token (защита async callbacks от race conditions) | ✅ Готово |
+| isFullyTypeable (проверка типаемости перед конвертацией) | ✅ Готово |
+| typedBufferIsFromConversion (защита от загрязнения буфера) | ✅ Готово |
 
 ---
 
@@ -34,16 +38,19 @@
 
 Самое важное: то, что уже работает, должно работать **без сюрпризов**.
 
-#### 1.1. Рефакторинг `main.swift`
-**Проблема:** файл ~1350 строк, god-class `Switcher` делает всё: event tap, performSwitch, auto-convert, undo, menu, editors, permissions, clipboard.
-**План:**
-- [ ] Вынести UI (menus, panels, windows) → `UIManager.swift`
+#### 1.1. Рефакторинг `main.swift` — частично выполнено
+**Что сделано:**
+- [x] UI (menus, panels, windows) → `UIManager.swift`
+- [x] Состояние → `SwitcherState.swift` (busy, typedBuffer, generation, isReplacing)
+- [x] `AutoSwitcher.findConversionRange` — единый алгоритм для авто + ручной конвертации
+
+**Что осталось:**
 - [ ] Вынести permissions logic → `Permissions.swift` (вместе с `Accessibility.swift`)
-- [ ] Оставить `main.swift` только app lifecycle + entry point
-- [ ] `Switcher` → разбить на: `EventTapManager` (tap + callbacks), `TextConverter` (performSwitch + convert flow), `AutoConvertEngine` (проброс в `AutoSwitcher`)
+- [ ] `Switcher` → разбить на: `EventTapManager` (tap + callbacks), `TextConverter` (performSwitch + convert flow)
+- [ ] `main.swift` сейчас ~850 строк (было ~1350) — целевое значение ~300
 
 #### 1.2. Автоматические UI-тесты
-**Проблема:** 160 unit-тестов покрывают логику, но не UI-флоу (панели прав, редакторы слов, меню).
+**Проблема:** 232 unit-теста покрывают логику, но не UI-флоу (панели прав, редакторы слов, меню).
 **План:**
 - [ ] Базовые smoke-тесты: открытие/закрытие панелей без крашей
 - [ ] Тесты lifecycle: `activationPolicy` корректно переключается на `.accessory` при закрытии каждой панели
@@ -211,7 +218,7 @@
 
 | # | Что | Оценка | Важно? |
 |---|---|---|---|
-| 1 | Рефакторинг `main.swift` → разбить на UI / Permissions / EventTap | 2–3 дня | ⭐⭐⭐ |
+| 1 | Доработка рефакторинга `main.swift` (Permissions, EventTap, TextConverter) | 1–2 дня | ⭐⭐⭐ |
 | 2 | Лог-система с уровнями и файлом | 1–2 дня | ⭐⭐⭐ |
 | 3 | Edge-case: Terminal/iTerm2 выделение | 1 день | ⭐⭐ |
 | 4 | Окно настроек (вкладки) | 2–3 дня | ⭐⭐ |
@@ -235,10 +242,11 @@ main.swift                    (entry point, app lifecycle)              ~50 ст
 ├── EventTapManager.swift     (CGEventTap, double-Shift detection)     ~150 строк
 ├── TextConverter.swift       (performSwitch, undo, convert flows)     ~250 строк
 ├── AutoConvertController.swift (tryAutoConvert, undoAutoConvert)       ~100 строк
-├── UIManager.swift           (menu bar, panels, editors, permissions UI) ~300 строк
+├── UIManager.swift           (menu bar, panels, editors, permissions UI) ~300 строк ✅
+├── SwitcherState.swift       (shared mutable state: busy, typedBuffer, generation) ✅
 └── Existing:
-    ├── AutoSwitcher.swift    (already separate, good)
-    ├── KeyEvents.swift       (already separate, good)
+    ├── AutoSwitcher.swift    (findConversionRange, shouldConvert, word lists)
+    ├── KeyEvents.swift       (isFullyTypeable, type, backspace, paste, undo)
     ├── KeyTracker.swift     (already separate, good)
     ├── Translit.swift       (already separate, good)
     ├── ChunkFinder.swift    (already separate, good)
@@ -247,9 +255,7 @@ main.swift                    (entry point, app lifecycle)              ~50 ст
     └── Clipboard.swift      (already separate, good)
 ```
 
-Проблема: `Switcher` класс держит **состояние** (busy, typedBuffer, lastAutoConvertInfo, recentAutoConvertedWords). Это состояние нужно либо передавать между контроллерами, либо вынести в отдельный `AppState` struct/class.
-
-**Рекомендация:** вынести состояние в `AppState` (singleton или injected), тогда каждый подкласс будет functional и тестируемый изолированно.
+Проблема: `Switcher` класс держит **состояние** (busy, typedBuffer, lastAutoConvertInfo). Это состояние вынесено в `SwitcherState.swift` (✅ выполнено), но `main.swift` всё ещё содержит `performSwitch`, `tryAutoConvert`, `undoAutoConvert`, `convertTypedText` — это следующий шаг рефакторинга.
 
 ### Notarization — важное замечание
 
@@ -286,6 +292,7 @@ Cask должен быть в `homebrew-cask` репозитории (PR). По�
 | Дата | Изменение |
 |---|---|
 | 2026-08-21 | Создан план развития |
+| 2026-08-22 | Обновлено: 232 теста, рефакторинг частично выполнен (UIManager + SwitcherState), findConversionRange, generation token, isFullyTypeable |
 
 ---
 

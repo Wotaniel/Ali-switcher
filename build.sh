@@ -96,4 +96,4 @@ codesign --verify "$OUT_APP" || { echo "✗ Signature verification failed"; exit
 echo ""
 echo "✓ Done: $OUT_APP (universal: arm64 + x86_64)"
 echo "  Run:     open \"$OUT_APP\""
-echo "  DMG:     ./make-dmg.sh → dist/AliSwitcher.dmg"
+echo "  DMG:     ./make-dmg.sh → dist/AliSwitcher-\$(cat VERSION).dmg"

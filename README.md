@@ -90,7 +90,7 @@
 ./build.sh                                    # → build/AliSwitcher.app
 build/AliSwitcher.app/Contents/MacOS/AliSwitcher --test  # 232 самопроверки
 ditto build/AliSwitcher.app /Applications/AliSwitcher.app # Установка
-./make-dmg.sh                                 # → dist/AliSwitcher.dmg
+./make-dmg.sh                                 # → dist/AliSwitcher-1.1.0.dmg
 ```
 
 Универсальный бинарник (arm64 + x86_64), собирается через `swiftc` (без SwiftPM). На машине с рассинхроном Command Line Tools `build.sh` автоматически использует тулчейн `swiftly` (`~/.swiftely`).
@@ -109,7 +109,7 @@ ditto build/AliSwitcher.app /Applications/AliSwitcher.app # Установка
 ### Из DMG (рекомендуемый)
 
 ```bash
-open dist/AliSwitcher.dmg
+open dist/AliSwitcher-1.1.0.dmg
 ```
 
 Перетащите `AliSwitcher.app` в `Applications`. При первом запуске приложение спросит «Запускать при входе?».

@@ -13,6 +13,13 @@ fi
 
 ./build.sh
 
+# Read version from VERSION file for DMG naming
+VERSION=$(cat VERSION 2>/dev/null | tr -d '[:space:]')
+if [ -z "$VERSION" ]; then
+    echo "⚠  No VERSION file — using 'dev'"
+    VERSION="dev"
+fi
+
 APP_SRC="build/AliSwitcher.app"
 [ -d "$APP_SRC" ] || APP_SRC="build/app/AliSwitcher.app"
 
@@ -95,9 +102,11 @@ sync
 hdiutil detach "$DEVICE" >/dev/null 2>&1 || hdiutil detach "/Volumes/$VOL_NAME" >/dev/null 2>&1 || true
 
 # --- final compressed UDZO ---
-rm -f dist/AliSwitcher.dmg
-hdiutil convert "$DMG_NAME_TMP" -format UDZO -imagekey zlib-level=9 -o dist/AliSwitcher.dmg >/dev/null
+# Clean ALL old DMG files (including "AliSwitcher 2.dmg" etc. from Finder copies)
+rm -f dist/AliSwitcher*.dmg
+DMG_NAME="dist/AliSwitcher-${VERSION}.dmg"
+hdiutil convert "$DMG_NAME_TMP" -format UDZO -imagekey zlib-level=9 -o "$DMG_NAME" >/dev/null
 
 echo ""
-echo "✓ DMG: dist/AliSwitcher.dmg"
-echo "  Install: open dist/AliSwitcher.dmg → drag $APP_BUNDLE_NAME into Applications"
+echo "✓ DMG: $DMG_NAME"
+echo "  Install: open $DMG_NAME → drag $APP_BUNDLE_NAME into Applications"

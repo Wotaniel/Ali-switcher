@@ -383,26 +383,25 @@ enum SelfTests {
         AutoSwitcher.enWords = []
 
         // --- Scenario 3: single-char triggers ---
-        // toCyrillic (Latin→Russian): BLOCKED (not enough signal for single char).
-        //   «f» → «а» blocked, «b» → «и» blocked.
-        // toLatin (Russian→Latin): ALLOWED for non-builtin chars.
-        //   «Ш» → «I» works (Ш is not a builtin RU word).
-        //   «ш» → «i» works (ш is not a builtin RU word).
-        //   «а», «в», «и» — builtins → blocked at step 4a.
+        // minWordLength=1: single-char non-builtin words CAN trigger.
+        // Builtins («а», «в», «и», «I», «a») blocked at step 4a.
         let d3f = AutoSwitcher.evaluateAutoConvert(buffer: "f", boundaryChar: " ")
-        check("integ: «f»+space → NO auto-convert (single-char toCyrillic blocked)", d3f == nil)
+        check("integ: «f»+space → auto-convert (single-char non-builtin)", d3f != nil)
+        check("integ: «f» → «а»", d3f?.convertedText == "а")
         let d3a = AutoSwitcher.evaluateAutoConvert(buffer: "а", boundaryChar: " ")
         check("integ: «а»+space → NO auto-convert (builtin RU)", d3a == nil)
         let d3v = AutoSwitcher.evaluateAutoConvert(buffer: "в", boundaryChar: " ")
         check("integ: «в»+space → NO auto-convert (builtin RU)", d3v == nil)
         let d3b = AutoSwitcher.evaluateAutoConvert(buffer: "b", boundaryChar: " ")
-        check("integ: «b»+space → NO auto-convert (single-char blocked)", d3b == nil)
-        // ALL single-char auto-convert triggers blocked — no exceptions.
-        // «Ш» → «I» only works via manual double-Shift (Translit.convert).
+        check("integ: «b»+space → auto-convert (single-char non-builtin)", d3b != nil)
+        check("integ: «b» → «и»", d3b?.convertedText == "и")
+        // Non-builtin Cyrillic single chars also trigger.
         let d3sh = AutoSwitcher.evaluateAutoConvert(buffer: "Ш", boundaryChar: " ")
-        check("integ: «Ш»+space → NO auto-convert (single-char blocked)", d3sh == nil)
+        check("integ: «Ш»+space → auto-convert (single-char non-builtin)", d3sh != nil)
+        check("integ: «Ш» → «I»", d3sh?.convertedText == "I")
         let d3shl = AutoSwitcher.evaluateAutoConvert(buffer: "ш", boundaryChar: " ")
-        check("integ: «ш»+space → NO auto-convert (single-char blocked)", d3shl == nil)
+        check("integ: «ш»+space → auto-convert (single-char non-builtin)", d3shl != nil)
+        check("integ: «ш» → «i»", d3shl?.convertedText == "i")
 
         // --- Scenario 4: retroactive — "f e ghbdtn" + space ---
         // After "ghbdtn" triggers conversion, retroactive walk
@@ -503,10 +502,11 @@ enum SelfTests {
         let d16 = AutoSwitcher.evaluateAutoConvert(buffer: "1", boundaryChar: " ")
         check("integ: «1»+space → no convert (digit)", d16 == nil)
 
-        // --- Scenario 17: two single-char Latin words → blocked (toCyrillic) ---
-        // "f d" + space → last segment "d" is single-char toCyrillic → blocked.
+        // --- Scenario 17: two single-char Latin words → both convert ---
+        // "f d" + space → "d" triggers (single-char non-builtin), retroactive converts "f" too.
         let d17 = AutoSwitcher.evaluateAutoConvert(buffer: "f d", boundaryChar: " ")
-        check("integ: «f d»+space → NO auto-convert (single-char toCyrillic)", d17 == nil)
+        check("integ: «f d»+space → auto-convert (single-char)", d17 != nil)
+        check("integ: «f d» → «а в»", d17?.convertedText == "а в")
 
         // --- Scenario 18: triggerWord is the last segment's word ---
         let d18 = AutoSwitcher.evaluateAutoConvert(buffer: "hello ghbdtn", boundaryChar: " ")
@@ -571,9 +571,9 @@ enum SelfTests {
         check("shouldConvert: «I» (retroactive) → «Ш»", AutoSwitcher.shouldConvert("I", minLength: 1, isRetroactive: true)?.converted == "Ш")
         check("shouldConvert: «a» (retroactive) → «ф»", AutoSwitcher.shouldConvert("a", minLength: 1, isRetroactive: true)?.converted == "ф")
 
-        // --- Scenario 28: «f» (non-builtin) single-char toCyrillic → blocked ---
+        // --- Scenario 28: «f» (non-builtin) single-char toCyrillic → converts ---
         let d28 = AutoSwitcher.evaluateAutoConvert(buffer: "f", boundaryChar: " ")
-        check("integ: «f»+space → NO auto-convert (single-char toCyrillic)", d28 == nil)
+        check("integ: «f»+space → auto-convert (single-char non-builtin)", d28 != nil)
 
         // --- Scenario 29: builtin lists cover common words ---
         check("builtin: «the» is builtin", AutoSwitcher.isBuiltinWord("the"))
@@ -605,13 +605,14 @@ enum SelfTests {
         check("retro: «f» (single-char) → «а»",
               AutoSwitcher.shouldConvert("f", minLength: 1, isRetroactive: true)?.converted == "а")
 
-        // --- Scenario 31: retroactive walk stops at valid multi-char word ---
+        // --- Scenario 31: retroactive walk — builtin bypasses spell-checker ---
         // "by ghbdtn" + space → "ghbdtn" triggers, retroactive tries "by".
-        // "by" is valid English → origMisspelled → nil → stops.
+        // "by" IS a builtin → bypasses spell-checker → converts to «ин».
+        // (Non-builtin valid words like "hello" still stop — see scenario 11.)
         let d31 = AutoSwitcher.evaluateAutoConvert(buffer: "by ghbdtn", boundaryChar: " ")
-        check("integ: «by ghbdtn» → converts «ghbdtn» only (by is valid EN)", d31 != nil)
-        check("integ: «by ghbdtn» → «привет» (retroactive stopped at «by»)", d31?.convertedText == "привет")
-        check("integ: «by ghbdtn» → wordCount 1", d31?.wordCount == 1)
+        check("integ: «by ghbdtn» → converts both (builtin bypass)", d31 != nil)
+        check("integ: «by ghbdtn» → «ин привет»", d31?.convertedText == "ин привет")
+        check("integ: «by ghbdtn» → wordCount 2", d31?.wordCount == 2)
 
         // --- Scenario 32: Translit.convert on mixed buffer ---
         // convertTypedText now uses Translit.convert directly for last word
@@ -642,13 +643,13 @@ enum SelfTests {
         check("shouldConvert: «I» (minLen:1, retro) → «Ш»",
               AutoSwitcher.shouldConvert("I", minLength: 1, isRetroactive: true)?.converted == "Ш")
 
-        // --- Scenario 35: single-char auto-convert ALWAYS blocked ---
-        // Auto-convert never triggers on single-char words — not enough signal.
-        // «Ш» → «I» only works via manual double-Shift (Translit.convert).
+        // --- Scenario 35: single-char auto-convert ---
+        // Non-builtin single chars CAN trigger (minWordLength=1).
+        // Builtins («I», «a») are blocked at step 4a.
         let d35sh = AutoSwitcher.evaluateAutoConvert(buffer: "Ш", boundaryChar: " ")
-        check("integ: «Ш»+space → NO auto-convert (single-char blocked)", d35sh == nil)
+        check("integ: «Ш»+space → auto-convert (non-builtin single-char)", d35sh != nil)
         let d35i = AutoSwitcher.evaluateAutoConvert(buffer: "I", boundaryChar: " ")
-        check("integ: «I»+space → NO auto-convert (single-char blocked)", d35i == nil)
+        check("integ: «I»+space → NO auto-convert (builtin EN)", d35i == nil)
 
         // --- Scenario 36: KeyEvents.isFullyTypeable (BUG #2 fix) ---
         // KeyEvents.type() types in ONE layout. isFullyTypeable checks whether

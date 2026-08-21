@@ -15,8 +15,10 @@ import AppKit
 /// then checks the last word and silently corrects it.
 enum AutoSwitcher {
 
-    /// Minimum word length to check (shorter → too many false positives).
-    static let minWordLength = 2
+    /// Minimum word length to check. Single-char words CAN trigger
+    /// auto-convert — but builtin word lists protect common single-char
+    /// words (а, в, и, I, a) from false-positive conversion.
+    static let minWordLength = 1
 
     // MARK: - Built-in common word lists
     //
@@ -246,17 +248,23 @@ enum AutoSwitcher {
     /// Unified algorithm for auto-convert and manual double-Shift.
     ///
     /// Rules:
-    /// 1. Last word ALWAYS converts (no checks — user explicitly wants this).
-    ///    For auto-convert (isManual=false): trigger word must pass shouldConvert
-    ///    (builtins, exceptions, spell-checker). For manual: just Translit.convert.
+    /// 1. Last word ALWAYS converts. For auto (isManual=false): trigger word
+    ///    must pass shouldConvert. For manual: just Translit.convert (user
+    ///    explicitly double-Shifted).
     /// 2. Walk backwards: convert previous words if:
-    ///    a. Same script (Latin/Cyrillic) as the last word before conversion
-    ///    b. NOT a valid word in its own language (spell-checker for multi-char;
-    ///       single-char skips spell-check — NSSpellChecker says all 1-letter
-    ///       words are "valid")
-    ///    c. For auto-convert only: also check builtins + learned exceptions
-    /// 3. Stop at: different script, valid word, or unconvertible word.
-    /// 4. Word size doesn't matter — single chars convert too.
+    ///    a. Same script (Latin/Cyrillic) as the last word
+    ///    b. Builtin words («не», «the», «как») → convert unconditionally
+    ///       (trigger already proved wrong layout)
+    ///    c. Non-builtin ≥2 chars → spell-checker: orig must be misspelled +
+    ///       converted must be valid in target
+    ///    d. Single-char → skip spell-checker (useless for 1-letter words)
+    ///    e. Learned exceptions block (user undid this word before)
+    ///    IDENTICAL rules for manual and auto.
+    /// 3. Stop at: different script, valid word, exception, or unconvertible.
+    ///
+    /// Note: conversion of SELECTED TEXT (convertSelectionViaClipboard) is
+    /// a separate path — it converts the selection directly via Translit
+    /// without any checks (no shouldConvert, no spell-checker, no builtins).
     static func findConversionRange(
         in text: String,
         isManual: Bool
@@ -266,15 +274,23 @@ enum AutoSwitcher {
               let lastResult = Translit.convert(lastSeg.word),
               lastResult.converted != lastSeg.word else { return nil }
 
+        let direction = lastResult.direction
+        let lastIsLatin = isWordLatin(lastSeg.word)
+        let mode = isManual ? "manual" : "auto"
+
+        log("findRange[\(mode)]: buffer=«\(redact(text))» segments=\(segments.map { "\($0.word)" })")
+        log("findRange[\(mode)]: last=«\(lastSeg.word)»→«\(lastResult.converted)» dir=\(direction == .toCyrillic ? "EN→RU" : "RU→EN") latin=\(lastIsLatin)")
+
         // For auto-convert: trigger word must pass shouldConvert checks.
         // (builtins, exceptions, spell-checker, structural filters).
         // For manual: last word always converts — no dictionary checks.
         if !isManual {
-            guard shouldConvert(lastSeg.word, isRetroactive: false) != nil else { return nil }
+            guard shouldConvert(lastSeg.word, isRetroactive: false) != nil else {
+                log("findRange[\(mode)]: last word «\(lastSeg.word)» failed shouldConvert → nil")
+                return nil
+            }
         }
 
-        let direction = lastResult.direction
-        let lastIsLatin = isWordLatin(lastSeg.word)
         let convLang = direction == .toCyrillic ? "ru" : "en"
 
         // Build converted text. Last word is always converted (no checks).
@@ -293,46 +309,49 @@ enum AutoSwitcher {
             // Same script as last word? If different → stop (can't convert
             // words from a different "wrong layout" in one pass).
             let prevIsLatin = isWordLatin(prevSeg.word)
-            if prevIsLatin != lastIsLatin { break }
+            if prevIsLatin != lastIsLatin {
+                log("findRange[\(mode)]: retro «\(prevSeg.word)» → stop (different script, latin=\(prevIsLatin))")
+                break
+            }
 
             // Can convert via Translit?
             guard let prevResult = Translit.convert(prevSeg.word),
                   prevResult.direction == direction,
-                  prevResult.converted != prevSeg.word else { break }
+                  prevResult.converted != prevSeg.word else {
+                log("findRange[\(mode)]: retro «\(prevSeg.word)» → stop (Translit fail / same direction / no change)")
+                break
+            }
 
-            // Single-char words: convert immediately (same as old retroactive
-            // — NSSpellChecker considers all 1-letter words "valid" → useless).
-            // Builtins are SKIPPED in retroactive (user was typing wrong layout,
-            // so even common words must convert — matches old isRetroactive=true).
-            // For auto: exceptions still block (user explicitly undid this word).
-            if prevSeg.word.count >= 2 {
-                // Multi-char: original must be misspelled (typed wrong).
+            // Spell-checker for non-builtin words (≥2 chars).
+            if !isBuiltinWord(prevSeg.word), prevSeg.word.count >= 2 {
                 let origMisspelled = checker.checkSpelling(
                     of: prevSeg.word, startingAt: 0,
                     language: origLang, wrap: false,
                     inSpellDocumentWithTag: 0, wordCount: nil
                 ).location != NSNotFound
-                if !origMisspelled { break }
+                if !origMisspelled {
+                    log("findRange[\(mode)]: retro «\(prevSeg.word)» → stop (valid in \(origLang))")
+                    break
+                }
 
-                // For auto-convert: converted must also be valid in target.
-                // For manual: skip this (user explicitly asked to convert).
-                if !isManual {
-                    let convValid = checker.checkSpelling(
-                        of: prevResult.converted, startingAt: 0,
-                        language: convLang, wrap: false,
-                        inSpellDocumentWithTag: 0, wordCount: nil
-                    ).location == NSNotFound
-                    if !convValid, !matchesDomainPattern(prevResult.converted) { break }
+                let convValid = checker.checkSpelling(
+                    of: prevResult.converted, startingAt: 0,
+                    language: convLang, wrap: false,
+                    inSpellDocumentWithTag: 0, wordCount: nil
+                ).location == NSNotFound
+                if !convValid, !matchesDomainPattern(prevResult.converted) {
+                    log("findRange[\(mode)]: retro «\(prevSeg.word)» → stop (converted «\(prevResult.converted)» invalid in \(convLang))")
+                    break
                 }
             }
 
-            // For auto-convert: exceptions block (user undid this before).
-            // Builtins are NOT checked — retroactive mode skips them.
-            // For manual: no exceptions check — user explicitly wants conversion.
-            if !isManual {
-                if isLearnedException(prevSeg.word) { break }
+            // Exceptions block (user undid this word before).
+            if isLearnedException(prevSeg.word) {
+                log("findRange[\(mode)]: retro «\(prevSeg.word)» → stop (learned exception)")
+                break
             }
 
+            log("findRange[\(mode)]: retro «\(prevSeg.word)» → «\(prevResult.converted)» ✓")
             convertedText = prevResult.converted + gap + convertedText
             wordIndex -= 1
         }
@@ -357,6 +376,9 @@ enum AutoSwitcher {
         }
 
         let lastGap = lastSeg.gap
+        let wordCount = segments.count - wordIndex - 1
+
+        log("findRange[\(mode)]: RESULT prefix=«\(redact(prefix))» orig=«\(redact(originalText))» conv=«\(redact(convertedText))\" gap=«\(redact(lastGap))» words=\(wordCount)")
 
         return ConversionPlan(
             prefix: prefix,
@@ -366,7 +388,7 @@ enum AutoSwitcher {
             deleteCount: originalText.count,
             direction: direction,
             triggerWord: lastSeg.word,
-            wordCount: segments.count - wordIndex - 1
+            wordCount: wordCount
         )
     }
 
@@ -380,10 +402,10 @@ enum AutoSwitcher {
     ) -> ConversionPlan? {
         let segments = parseBufferSegments(buffer)
 
-        // Auto-convert gate: only multi-char words can trigger.
-        // Single-char triggers create false positives (й→q, ц→w…).
-        // Single chars ARE converted retroactively (when a multi-char word
-        // already proved wrong layout).
+        // Auto-convert: single-char words CAN trigger. Builtin word lists
+        // protect common single-char words (а, в, и, I, a) from false
+        // positives. Uncommon single chars (ф→a, й→q) will convert —
+        // they're almost certainly typed in the wrong layout.
         guard let lastSegment = segments.last,
               lastSegment.word.count >= minWordLength else {
             return nil
@@ -493,12 +515,11 @@ enum AutoSwitcher {
             return nil  // user undid this conversion before — don't repeat
         }
 
-        // 4c) Single-char words (minLength == 1, retroactive only):
-        // Both directions allowed for manual double-Shift (convertTypedText).
-        // Auto-mode blocks single-char .toLatin in evaluateAutoConvert's
-        // retroactive walk to prevent cycles (О→J→О→J…).
-        // Builtins are skipped in retroactive (step 4a), so «а», «в», «и» etc.
-        // still won't convert — but «Ш» → «I» works.
+        // 4c) Single-char words: convert immediately (spell-checker is useless
+        // for 1-letter words — considers everything "valid").
+        // Builtin lists protect common words: «а», «в», «и» (RU), «I», «a» (EN)
+        // are checked in step 4a → won't reach here. Uncommon single chars
+        // like «ф»→«a», «й»→«q» WILL convert — almost certainly wrong layout.
         if word.count == 1, minLength <= 1 {
             return result
         }

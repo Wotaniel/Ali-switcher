@@ -441,7 +441,7 @@ final class Switcher {
 
         let toRussian = decision.direction == .toCyrillic
         let fullConvertedText = decision.convertedText + boundaryChar
-        log("auto: «\(redact(decision.triggerWord))» → «\(redact(decision.convertedText))» (retroactive \(decision.wordCount) words, deleting \(decision.deleteCount))")
+        log("auto: buffer=«\(redact(state.typedBuffer))» → «\(redact(decision.convertedText))»+\(boundaryChar) (dir=\(toRussian ? "EN→RU" : "RU→EN"), \(decision.wordCount) words, del \(decision.deleteCount))")
 
         state.busy = true
         state.isReplacing = true; state.isReplacingSince = CFAbsoluteTimeGetCurrent()
@@ -711,12 +711,12 @@ final class Switcher {
 
         // Type ONLY the converted portion (+ trailing gap). The prefix stays
         // in the field (it was not erased). This avoids duplicating the prefix.
+        let toRussian = plan.direction == .toCyrillic
         let fullText = plan.convertedText + plan.lastGap
         let deleteCount = plan.deleteCount + plan.lastGap.count
-        log("convert: «\(redact(chunk))» → «\(redact(fullText))» (manual, \(plan.wordCount) words, deleting \(deleteCount))")
+        log("convert: chunk=«\(redact(chunk))» prefix=«\(redact(plan.prefix))» orig=«\(redact(plan.originalText))» → conv=«\(redact(plan.convertedText))»+gap full=«\(redact(fullText))» (dir=\(toRussian ? "EN→RU" : "RU→EN"), \(plan.wordCount) words, del \(deleteCount))")
 
         // BUG #2 fix: universal typeability pre-check.
-        let toRussian = plan.direction == .toCyrillic
         if KeyEvents.isFullyTypeable(fullText, toRussian: toRussian) {
             replaceByDeleting(fullText,
                               deleteCount: deleteCount,

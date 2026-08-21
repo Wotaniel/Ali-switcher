@@ -507,13 +507,22 @@ final class Switcher {
             return
         }
 
-        // Undo auto-convert: highest priority — double-Shift right after
-        // auto-convert reverts to the original text and layout.
+        // Undo auto-convert: double-Shift right after auto-convert reverts
+        // to the original text and layout. BUT if the user has already typed
+        // new text after the auto-convert, they want to convert that text,
+        // not undo the previous conversion.
         if let info = state.lastAutoConvertInfo {
-            log("undo: reverting auto-convert")
-            state.lastAutoConvertInfo = nil
-            undoAutoConvert(info)
-            return
+            let hasNewText = state.typedBuffer.contains { !AutoSwitcher.isBoundary($0) }
+            if hasNewText {
+                log("switch: new text after auto-convert → convert (skip undo)")
+                state.lastAutoConvertInfo = nil
+                // Fall through to conversion below.
+            } else {
+                log("undo: reverting auto-convert")
+                state.lastAutoConvertInfo = nil
+                undoAutoConvert(info)
+                return
+            }
         }
 
         // 1) Selection → always use clipboard (Cmd+C/V), even if buffer is not empty.

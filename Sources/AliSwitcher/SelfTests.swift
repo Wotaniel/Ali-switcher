@@ -371,7 +371,7 @@ enum SelfTests {
         let d1 = AutoSwitcher.evaluateAutoConvert(buffer: "ghbdtn", boundaryChar: " ")
         check("integ: «ghbdtn»+space → auto-convert", d1 != nil)
         check("integ: «ghbdtn» → «привет»", d1?.convertedText == "привет")
-        check("integ: «ghbdtn» → fullText with space", d1?.fullConvertedText == "привет ")
+        check("integ: «ghbdtn» → fullText with space", d1?.convertedText == "привет")
         check("integ: «ghbdtn» → deleteCount 6", d1?.deleteCount == 6)
         check("integ: «ghbdtn» → direction toCyrillic", d1?.direction == .toCyrillic)
         check("integ: «ghbdtn» → wordCount 1", d1?.wordCount == 1)
@@ -410,7 +410,7 @@ enum SelfTests {
         let d4 = AutoSwitcher.evaluateAutoConvert(buffer: "f e ghbdtn", boundaryChar: " ")
         check("integ: «f e ghbdtn»+space → retroactive convert", d4 != nil)
         check("integ: «f e ghbdtn» → «а у привет»", d4?.convertedText == "а у привет")
-        check("integ: «f e ghbdtn» → fullText with space", d4?.fullConvertedText == "а у привет ")
+        check("integ: «f e ghbdtn» → fullText with space", d4?.convertedText == "а у привет")
         // deleteCount: "f"(1) + " "(1) + "e"(1) + " "(1) + "ghbdtn"(6) = 10
         check("integ: «f e ghbdtn» → deleteCount 10", d4?.deleteCount == 10)
         check("integ: «f e ghbdtn» → wordCount 3", d4?.wordCount == 3)
@@ -496,7 +496,7 @@ enum SelfTests {
         // Period is also a boundary: "ghbdtn." should convert.
         let d15 = AutoSwitcher.evaluateAutoConvert(buffer: "ghbdtn", boundaryChar: ".")
         check("integ: «ghbdtn»+period → converts", d15 != nil)
-        check("integ: «ghbdtn»+period → «привет.»", d15?.fullConvertedText == "привет.")
+        check("integ: «ghbdtn»+period → «привет.»", d15?.convertedText == "привет")
 
         // --- Scenario 16: single char that doesn't convert ---
         // "z" does convert (→ "я"), but a non-letter like "1" should not.
@@ -694,6 +694,60 @@ enum SelfTests {
         let leading37d = chunk37d.prefix(while: { AutoSwitcher.isBoundary($0) }).count
         check("boundary: «.abc» → leadingBoundaryCount 1", leading37d == 1)
         check("boundary: «.abc» → deleteCount 3 (not 4)", chunk37d.count - leading37d == 3)
+
+        // --- Scenario 38: findConversionRange unified algorithm ---
+        // Manual mode: last word always converts, previous convert if same script
+        // + misspelled. No builtins/exceptions check in retroactive.
+        let p38a = AutoSwitcher.findConversionRange(in: "f e ghbdtn", isManual: true)
+        check("plan: «f e ghbdtn» (manual) → converts", p38a != nil)
+        check("plan: «f e ghbdtn» → «а у привет»", p38a?.convertedText == "а у привет")
+        check("plan: «f e ghbdtn» → deleteCount 10", p38a?.deleteCount == 10)
+        check("plan: «f e ghbdtn» → wordCount 3", p38a?.wordCount == 3)
+        check("plan: «f e ghbdtn» → prefix «»", p38a?.prefix == "")
+        check("plan: «f e ghbdtn» → lastGap «»", p38a?.lastGap == "")
+
+        // Manual: single-char words in the middle of same-script fragment
+        let p38b = AutoSwitcher.findConversionRange(in: "f ghbdtn", isManual: true)
+        check("plan: «f ghbdtn» (manual) → «а привет»", p38b?.convertedText == "а привет")
+        check("plan: «f ghbdtn» → wordCount 2", p38b?.wordCount == 2)
+
+        // Manual: valid word stops the walk (not misspelled → typed intentionally)
+        let p38c = AutoSwitcher.findConversionRange(in: "hello ghbdtn", isManual: true)
+        check("plan: «hello ghbdtn» (manual) → «привет» only", p38c?.convertedText == "привет")
+        check("plan: «hello ghbdtn» → prefix «hello »", p38c?.prefix == "hello ")
+        check("plan: «hello ghbdtn» → wordCount 1", p38c?.wordCount == 1)
+        check("plan: «hello ghbdtn» → deleteCount 6", p38c?.deleteCount == 6)
+
+        // Manual: different script stops the walk
+        let p38d = AutoSwitcher.findConversionRange(in: "ghbdtn слово", isManual: true)
+        // «слово» is Cyrillic, «ghbdtn» is Latin → different scripts
+        // Last word «слово» → Translit.convert → «ckjdj» (toLatin)
+        // «ghbdtn» is Latin → different script → walk stops
+        check("plan: «ghbdtn слово» (manual) → «ckjdj» only", p38d?.convertedText == "ckjdj")
+        check("plan: «ghbdtn слово» → prefix «ghbdtn »", p38d?.prefix == "ghbdtn ")
+
+        // Auto mode: builtins DON'T block in retroactive (user was typing wrong layout)
+        let p38e = AutoSwitcher.findConversionRange(in: "I ghbdtn", isManual: false)
+        check("plan: «I ghbdtn» (auto) → converts «I» too", p38e?.convertedText == "Ш привет")
+        check("plan: «I ghbdtn» → wordCount 2", p38e?.wordCount == 2)
+
+        // Auto mode: exceptions DO block in retroactive
+        AutoSwitcher.enWords = ["I"]
+        let p38f = AutoSwitcher.findConversionRange(in: "I ghbdtn", isManual: false)
+        check("plan: «I ghbdtn» (auto, «I» in exceptions) → «привет» only", p38f?.convertedText == "привет")
+        AutoSwitcher.enWords = []
+
+        // Manual mode: exceptions DON'T block (user explicitly wants conversion)
+        AutoSwitcher.enWords = ["ghbdtn"]
+        let p38g = AutoSwitcher.findConversionRange(in: "ghbdtn", isManual: true)
+        check("plan: «ghbdtn» (manual, in exceptions) → still converts", p38g?.convertedText == "привет")
+        AutoSwitcher.enWords = []
+
+        // Trailing gap handling: spaces after last word
+        let p38h = AutoSwitcher.findConversionRange(in: "ghbdtn ", isManual: true)
+        check("plan: «ghbdtn » (trailing space) → convertedText «привет»", p38h?.convertedText == "привет")
+        check("plan: «ghbdtn » → lastGap « »", p38h?.lastGap == " ")
+        check("plan: «ghbdtn » → deleteCount 6 (no trailing gap)", p38h?.deleteCount == 6)
 
         // Restore state
         AutoSwitcher.enWords = savedEN

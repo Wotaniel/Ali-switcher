@@ -85,6 +85,13 @@ final class SwitcherState {
     /// ANY app (VS Code, Slack included) — no Accessibility needed.
     var typedBuffer = ""
 
+    /// True when typedBuffer contains converted text from a previous
+    /// conversion (for toggle-back). New typing clears it — the user is
+    /// typing a NEW fragment, not continuing the converted one.
+    /// Without this, converted text pollutes the buffer and the next
+    /// conversion sees stale data (e.g. «если» leaking into «масяськи»).
+    var typedBufferIsFromConversion = false
+
     // MARK: - Event tap retry
 
     var tapRetryTimer: Timer?

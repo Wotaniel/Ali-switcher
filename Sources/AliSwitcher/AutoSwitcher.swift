@@ -215,17 +215,159 @@ enum AutoSwitcher {
         return segments
     }
 
-    /// Result of evaluating auto-convert: the decision to convert (or not).
-    /// Pure data — no side effects. The caller (Switcher) performs the actual
-    /// backspace/type/layout-switch.
-    struct AutoConvertDecision {
-        let convertedText: String       // text to type (without boundary char)
-        let fullConvertedText: String  // text to type (with boundary char)
-        let deleteCount: Int           // chars to backspace
+    /// Result of finding what to convert in a text fragment.
+    /// Shared between auto-convert and manual double-Shift.
+    struct ConversionPlan {
+        /// Text before the conversion range (stays in field, not retyped).
+        let prefix: String
+        /// Original text being converted (converted words + gaps between them,
+        /// WITHOUT the trailing gap after the last word).
+        let originalText: String
+        /// Converted text to type (converted words + gaps between them,
+        /// WITHOUT the trailing gap after the last word).
+        let convertedText: String
+        /// Trailing boundary chars after the last word (spaces, punctuation).
+        /// For manual: these stay in the field, so caller adds them to
+        /// both the typed text and delete count.
+        /// For auto: these were NOT typed yet (boundary was blocked),
+        /// so the caller adds the boundary char instead.
+        let lastGap: String
+        /// Chars to backspace (= originalText.count, without trailing gap).
+        let deleteCount: Int
+        /// Conversion direction (toCyrillic or toLatin).
         let direction: SwitchDirection
-        let triggerWord: String        // word that triggered conversion
-        let originalText: String       // pre-conversion text (for undo)
-        let wordCount: Int             // number of words converted (retroactive)
+        /// Last word — determined the direction.
+        let triggerWord: String
+        /// Number of words converted (including retroactive).
+        let wordCount: Int
+    }
+
+    /// Determines what text to convert in a fragment.
+    /// Unified algorithm for auto-convert and manual double-Shift.
+    ///
+    /// Rules:
+    /// 1. Last word ALWAYS converts (no checks — user explicitly wants this).
+    ///    For auto-convert (isManual=false): trigger word must pass shouldConvert
+    ///    (builtins, exceptions, spell-checker). For manual: just Translit.convert.
+    /// 2. Walk backwards: convert previous words if:
+    ///    a. Same script (Latin/Cyrillic) as the last word before conversion
+    ///    b. NOT a valid word in its own language (spell-checker for multi-char;
+    ///       single-char skips spell-check — NSSpellChecker says all 1-letter
+    ///       words are "valid")
+    ///    c. For auto-convert only: also check builtins + learned exceptions
+    /// 3. Stop at: different script, valid word, or unconvertible word.
+    /// 4. Word size doesn't matter — single chars convert too.
+    static func findConversionRange(
+        in text: String,
+        isManual: Bool
+    ) -> ConversionPlan? {
+        let segments = parseBufferSegments(text)
+        guard let lastSeg = segments.last, !lastSeg.word.isEmpty,
+              let lastResult = Translit.convert(lastSeg.word),
+              lastResult.converted != lastSeg.word else { return nil }
+
+        // For auto-convert: trigger word must pass shouldConvert checks.
+        // (builtins, exceptions, spell-checker, structural filters).
+        // For manual: last word always converts — no dictionary checks.
+        if !isManual {
+            guard shouldConvert(lastSeg.word, isRetroactive: false) != nil else { return nil }
+        }
+
+        let direction = lastResult.direction
+        let lastIsLatin = isWordLatin(lastSeg.word)
+        let convLang = direction == .toCyrillic ? "ru" : "en"
+
+        // Build converted text. Last word is always converted (no checks).
+        // DON'T include lastSeg.gap — it's trailing boundary chars (spaces,
+        // punctuation) handled separately by callers.
+        var convertedText = lastResult.converted
+        var wordIndex = segments.count - 2
+        let checker = NSSpellChecker.shared
+        let origLang = direction == .toCyrillic ? "en" : "ru"
+
+        while wordIndex >= 0 {
+            let prevSeg = segments[wordIndex]
+            let gap = prevSeg.gap
+            if prevSeg.word.isEmpty { wordIndex -= 1; continue }
+
+            // Same script as last word? If different → stop (can't convert
+            // words from a different "wrong layout" in one pass).
+            let prevIsLatin = isWordLatin(prevSeg.word)
+            if prevIsLatin != lastIsLatin { break }
+
+            // Can convert via Translit?
+            guard let prevResult = Translit.convert(prevSeg.word),
+                  prevResult.direction == direction,
+                  prevResult.converted != prevSeg.word else { break }
+
+            // Single-char words: convert immediately (same as old retroactive
+            // — NSSpellChecker considers all 1-letter words "valid" → useless).
+            // Builtins are SKIPPED in retroactive (user was typing wrong layout,
+            // so even common words must convert — matches old isRetroactive=true).
+            // For auto: exceptions still block (user explicitly undid this word).
+            if prevSeg.word.count >= 2 {
+                // Multi-char: original must be misspelled (typed wrong).
+                let origMisspelled = checker.checkSpelling(
+                    of: prevSeg.word, startingAt: 0,
+                    language: origLang, wrap: false,
+                    inSpellDocumentWithTag: 0, wordCount: nil
+                ).location != NSNotFound
+                if !origMisspelled { break }
+
+                // For auto-convert: converted must also be valid in target.
+                // For manual: skip this (user explicitly asked to convert).
+                if !isManual {
+                    let convValid = checker.checkSpelling(
+                        of: prevResult.converted, startingAt: 0,
+                        language: convLang, wrap: false,
+                        inSpellDocumentWithTag: 0, wordCount: nil
+                    ).location == NSNotFound
+                    if !convValid, !matchesDomainPattern(prevResult.converted) { break }
+                }
+            }
+
+            // For auto-convert: exceptions block (user undid this before).
+            // Builtins are NOT checked — retroactive mode skips them.
+            // For manual: no exceptions check — user explicitly wants conversion.
+            if !isManual {
+                if isLearnedException(prevSeg.word) { break }
+            }
+
+            convertedText = prevResult.converted + gap + convertedText
+            wordIndex -= 1
+        }
+
+        // Build prefix (unchanged text before conversion range — stays in field).
+        var prefix = ""
+        if wordIndex >= 0 {
+            for i in 0...wordIndex {
+                prefix += segments[i].word + segments[i].gap
+            }
+        }
+
+        // Build originalText for undo = converted words + gaps between them
+        // (WITHOUT the trailing gap after the last word).
+        var originalText = ""
+        for i in (wordIndex + 1)..<segments.count {
+            originalText += segments[i].word
+            // Add gap for all segments except the last one (trailing gap is separate)
+            if i < segments.count - 1 {
+                originalText += segments[i].gap
+            }
+        }
+
+        let lastGap = lastSeg.gap
+
+        return ConversionPlan(
+            prefix: prefix,
+            originalText: originalText,
+            convertedText: convertedText,
+            lastGap: lastGap,
+            deleteCount: originalText.count,
+            direction: direction,
+            triggerWord: lastSeg.word,
+            wordCount: segments.count - wordIndex - 1
+        )
     }
 
     /// Evaluates whether the buffer should be auto-converted on a word boundary.
@@ -235,69 +377,22 @@ enum AutoSwitcher {
     static func evaluateAutoConvert(
         buffer: String,
         boundaryChar: String
-    ) -> AutoConvertDecision? {
+    ) -> ConversionPlan? {
         let segments = parseBufferSegments(buffer)
 
-        // The last segment's word is what we check first.
-        // ONLY multi-char words can trigger auto-convert (minWordLength = 2).
-        // Single-char auto-convert is NEVER triggered — not enough signal,
-        // and creates false positives (й→q, ц→w…). Single chars are still
-        // converted RETROACTIVELY (when a multi-char word proved wrong layout).
+        // Auto-convert gate: only multi-char words can trigger.
+        // Single-char triggers create false positives (й→q, ц→w…).
+        // Single chars ARE converted retroactively (when a multi-char word
+        // already proved wrong layout).
         guard let lastSegment = segments.last,
               lastSegment.word.count >= minWordLength else {
             return nil
         }
 
-        // Skip words in the exceptions list (learned from previous undos).
-        if isLearnedException(lastSegment.word) {
-            return nil
-        }
+        // Delegate to unified function (isManual=false → auto-convert checks).
+        guard let plan = findConversionRange(in: buffer, isManual: false) else { return nil }
 
-        guard let result = shouldConvert(lastSegment.word, isRetroactive: false) else { return nil }
-
-        // Retroactive: walk backwards from the last word and convert all previous
-        // words that are also in the wrong layout (same direction).
-        var convertedText = result.converted
-        var deleteCount = lastSegment.word.count
-
-        var wordIndex = segments.count - 2
-        while wordIndex >= 0 {
-            let prevSeg = segments[wordIndex]
-            let gap = segments[wordIndex].gap
-            if let prevResult = shouldConvert(prevSeg.word, minLength: 1, isRetroactive: true),
-               prevResult.direction == result.direction {
-                // Block single-char toLatin in auto-convert retroactive walk.
-                // Prevents cycles like О→J→О→J… when auto-convert encounters
-                // a single Cyrillic char during the backwards walk.
-                // (Manual double-Shift is unaffected — it uses shouldConvert
-                // with isRetroactive=true and allows single-char toLatin.)
-                if prevSeg.word.count == 1, prevResult.direction == .toLatin {
-                    break
-                }
-                convertedText = prevResult.converted + gap + convertedText
-                deleteCount += prevSeg.word.count + gap.count
-                wordIndex -= 1
-            } else {
-                break  // Stop — this word is not in the wrong layout.
-            }
-        }
-
-        // Compute the original text (pre-conversion) for undo support.
-        var originalText = ""
-        for segIdx in (wordIndex + 1)..<segments.count {
-            originalText += segments[segIdx].word + segments[segIdx].gap
-        }
-        let fullConvertedText = convertedText + boundaryChar
-
-        return AutoConvertDecision(
-            convertedText: convertedText,
-            fullConvertedText: fullConvertedText,
-            deleteCount: deleteCount,
-            direction: result.direction,
-            triggerWord: lastSegment.word,
-            originalText: originalText,
-            wordCount: segments.count - wordIndex - 1
-        )
+        return plan
     }
 
     // MARK: - Learned words (two independent lists)

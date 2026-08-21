@@ -386,15 +386,31 @@ final class Switcher {
                 state.secureField = isFocusedFieldSecure()
             }
             guard !state.secureField else { return }
+            // Buffer pollution fix: if typedBuffer has converted text from a
+            // previous conversion (for toggle-back), clear it before appending
+            // new text — the user is typing a NEW fragment, not continuing
+            // the converted one.
+            if state.typedBufferIsFromConversion {
+                state.typedBuffer = ""
+                state.typedBufferIsFromConversion = false
+            }
             state.typedBuffer.append(s)
             if state.typedBuffer.count > kMaxBufferLength {
                 state.typedBuffer.removeFirst(state.typedBuffer.count - kMaxBufferLength)
             }
         case .deleteBackward:
             if state.secureField { return }
-            if !state.typedBuffer.isEmpty { state.typedBuffer.removeLast() }
+            // Buffer pollution fix: if buffer is from conversion, backspace
+            // modifies the real field — buffer is now stale. Clear it.
+            if state.typedBufferIsFromConversion {
+                state.typedBuffer = ""
+                state.typedBufferIsFromConversion = false
+            } else if !state.typedBuffer.isEmpty {
+                state.typedBuffer.removeLast()
+            }
         case .reset:
             state.typedBuffer = ""
+            state.typedBufferIsFromConversion = false
             state.secureField = false
         case .ignore:
             break
@@ -424,9 +440,8 @@ final class Switcher {
         }
 
         let toRussian = decision.direction == .toCyrillic
+        let fullConvertedText = decision.convertedText + boundaryChar
         log("auto: «\(redact(decision.triggerWord))» → «\(redact(decision.convertedText))» (retroactive \(decision.wordCount) words, deleting \(decision.deleteCount))")
-
-        let fullConvertedText = decision.fullConvertedText
 
         state.busy = true
         state.isReplacing = true; state.isReplacingSince = CFAbsoluteTimeGetCurrent()
@@ -655,13 +670,11 @@ final class Switcher {
     /// (from real field text if Accessibility is available, otherwise from the buffer),
     /// erase it with Backspaces and retype the converted text.
     ///
-    /// Manual double-Shift conversion logic (NO dictionary checks):
-    /// 1. Last word: ALWAYS convert (user explicitly wants this converted).
-    /// 2. Previous words: convert if same layout direction AND not a valid
-    ///    word in its own language (misspelled = typed in wrong layout).
-    ///    Stop at first valid word — it was typed intentionally.
-    /// No builtin/exception/spell-check on converted result — those are
-    /// ONLY for auto-switch.
+    /// Uses the unified findConversionRange algorithm (shared with auto-convert):
+    /// 1. Last word: ALWAYS convert (no dictionary checks).
+    /// 2. Previous words: convert if same script AND not a valid word
+    ///    in own language (spell-checker). Stop at valid word or script change.
+    /// 3. Word size doesn't matter — single chars convert too.
     private func convertTypedText() {
         let ns: NSString
         if let real = realTextBeforeCaret(), !real.isEmpty {
@@ -688,75 +701,22 @@ final class Switcher {
             return
         }
 
-        let segments = AutoSwitcher.parseBufferSegments(chunk)
-        guard let lastSeg = segments.last, !lastSeg.word.isEmpty,
-              let lastResult = Translit.convert(lastSeg.word),
-              lastResult.converted != lastSeg.word else {
+        // Unified algorithm: determine what to convert (shared with auto-convert).
+        guard let plan = AutoSwitcher.findConversionRange(in: chunk, isManual: true) else {
             log("convert: «\(redact(chunk))» last word cannot be converted → toggle")
             LayoutSwitch.toggle()
             state.busy = false
             return
         }
 
-        let direction = lastResult.direction
+        // Type ONLY the converted portion (+ trailing gap). The prefix stays
+        // in the field (it was not erased). This avoids duplicating the prefix.
+        let fullText = plan.convertedText + plan.lastGap
+        let deleteCount = plan.deleteCount + plan.lastGap.count
+        log("convert: «\(redact(chunk))» → «\(redact(fullText))» (manual, \(plan.wordCount) words, deleting \(deleteCount))")
 
-        // Build converted text. Last word is always converted (no checks).
-        var convertedText = lastResult.converted + lastSeg.gap
-
-        // Retroactive walk: convert previous words if:
-        // - Same direction as last word (wrong layout)
-        // - Misspelled in own language (not a valid word → typed by mistake)
-        // Stop at first valid word — natural boundary.
-        let checker = NSSpellChecker.shared
-        let origLang = direction == .toCyrillic ? "en" : "ru"
-
-        var wordIndex = segments.count - 2
-        while wordIndex >= 0 {
-            let prevSeg = segments[wordIndex]
-            let gap = prevSeg.gap
-            if prevSeg.word.isEmpty { wordIndex -= 1; continue }
-            guard let prevResult = Translit.convert(prevSeg.word),
-                  prevResult.direction == direction,
-                  prevResult.converted != prevSeg.word else { break }
-            // Block single-char toLatin in retroactive walk (same as auto-convert).
-            // Prevents cycles like О→J→О→J… and false positives (single Cyrillic
-            // letter → QWERTY key, e.g. й→q is rarely the user's intent).
-            if prevSeg.word.count == 1, prevResult.direction == .toLatin { break }
-            // Is the original word a valid word in its own language?
-            // If yes → typed intentionally → stop the walk.
-            let origMisspelled = checker.checkSpelling(
-                of: prevSeg.word, startingAt: 0,
-                language: origLang, wrap: false,
-                inSpellDocumentWithTag: 0, wordCount: nil
-            ).location != NSNotFound
-            guard origMisspelled else { break }
-            convertedText = prevResult.converted + gap + convertedText
-            wordIndex -= 1
-        }
-
-        // Prefix: unchanged words before the converted portion (stays in field).
-        var prefix = ""
-        var i = 0
-        while i <= wordIndex {
-            prefix += segments[i].word + segments[i].gap
-            i += 1
-        }
-
-        let fullText = prefix + convertedText
-        log("convert: «\(redact(chunk))» → «\(redact(fullText))» (manual, last word forced)")
-
-        // BUG #1 fix: parseBufferSegments drops leading boundary chars (space,
-        // period) from segments — but they're still part of chunk and are
-        // already in the field. If we delete chunk.count chars, we eat one
-        // extra boundary char per leading boundary → data loss.
-        let leadingBoundaryCount = chunk.prefix(while: { AutoSwitcher.isBoundary($0) }).count
-        let deleteCount = chunk.count - leadingBoundaryCount
-
-        // BUG #2 fix: universal typeability pre-check. KeyEvents.type() can
-        // only type chars with QWERTY key mappings. Emoji, diacritics, and
-        // other non-QWERTY chars would be silently dropped. If ANY char
-        // can't be typed → use clipboard paste (handles any Unicode).
-        let toRussian = direction == .toCyrillic
+        // BUG #2 fix: universal typeability pre-check.
+        let toRussian = plan.direction == .toCyrillic
         if KeyEvents.isFullyTypeable(fullText, toRussian: toRussian) {
             replaceByDeleting(fullText,
                               deleteCount: deleteCount,
@@ -799,6 +759,7 @@ final class Switcher {
                 // Replace buffer with converted text → second double-Shift
                 // converts back (toggle) instead of repeating the same conversion.
                 self.state.typedBuffer = text
+                self.state.typedBufferIsFromConversion = true
                 self.state.lastWasSelectionConvert = false
                 self.replayPendingKeystrokes()
             }
@@ -825,6 +786,7 @@ final class Switcher {
                 self.state.busy = false
                 guard self.state.generation == gen else { return }  // stale — skip state write
                 self.state.typedBuffer = text
+                self.state.typedBufferIsFromConversion = true
                 self.state.lastWasSelectionConvert = false
                 self.replayPendingKeystrokes()
             }

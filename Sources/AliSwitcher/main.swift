@@ -699,9 +699,20 @@ final class Switcher {
 
         let fullText = prefix + convertedText
         log("convert: «\(redact(chunk))» → «\(redact(fullText))» (manual, last word forced)")
-        replaceByDeleting(fullText,
-                          deleteCount: chunk.count,
-                          toRussian: direction == .toCyrillic)
+
+        // Check if the text has mixed scripts (both Cyrillic and Latin letters).
+        // If so, KeyEvents.type() can't handle it (it types in one layout).
+        // Use clipboard paste instead — it handles any Unicode text.
+        let hasCyrillic = fullText.contains { Translit.isCyrillic($0) }
+        let hasLatin = fullText.contains { $0.isLetter && !Translit.isCyrillic($0) }
+        if hasCyrillic && hasLatin {
+            log("convert: mixed script → clipboard paste")
+            replaceByClipboard(fullText, deleteCount: chunk.count)
+        } else {
+            replaceByDeleting(fullText,
+                              deleteCount: chunk.count,
+                              toRussian: direction == .toCyrillic)
+        }
     }
 
     /// The field text before the caret (if Accessibility is available).
@@ -733,6 +744,29 @@ final class Switcher {
                 self.state.busy = false
                 // Replace buffer with converted text → second double-Shift
                 // converts back (toggle) instead of repeating the same conversion.
+                self.state.typedBuffer = text
+                self.state.lastWasSelectionConvert = false
+                self.replayPendingKeystrokes()
+            }
+        }
+    }
+
+    /// Erases deleteCount chars via Backspace, then pastes text via clipboard.
+    /// Used when the converted text has mixed scripts (Cyrillic + Latin)
+    /// and can't be typed in a single layout.
+    private func replaceByClipboard(_ text: String, deleteCount: Int) {
+        guard !state.isReplacing else { state.busy = false; return }
+        state.isReplacing = true
+        let saved = Clipboard.snapshot()
+        KeyEvents.backspace(count: deleteCount) { [weak self] in
+            guard let self else { return }
+            log("deleted \(deleteCount), pasting «\(text)» via clipboard")
+            Clipboard.copy(text)
+            KeyEvents.paste()
+            DispatchQueue.main.asyncAfter(deadline: .now() + Timing.clipboardRestore) {
+                Clipboard.restore(saved)
+                self.state.isReplacing = false
+                self.state.busy = false
                 self.state.typedBuffer = text
                 self.state.lastWasSelectionConvert = false
                 self.replayPendingKeystrokes()

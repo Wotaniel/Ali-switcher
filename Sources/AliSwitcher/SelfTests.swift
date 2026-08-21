@@ -570,6 +570,31 @@ enum SelfTests {
         check("builtin: «f» is NOT builtin", !AutoSwitcher.isBuiltinWord("f"))
         check("builtin: «ghbdtn» is NOT builtin", !AutoSwitcher.isBuiltinWord("ghbdtn"))
 
+        // --- Scenario 30: multi-char retroactive does NOT convert valid words ---
+        // "by" is a valid English word (and a builtin). In retroactive mode,
+        // builtins are skipped, BUT origMisspelled must still be checked.
+        // "by" → "ин" (same direction .toCyrillic), but "by" is valid English
+        // → origMisspelled = false → shouldConvert returns nil.
+        // Bug was: minLength >= 2 skipped origMisspelled for retroactive.
+        // Fix: use word.count >= 2 instead.
+        check("retro: «by» → shouldConvert(minLen:1, retro) → nil (valid EN)",
+              AutoSwitcher.shouldConvert("by", minLength: 1, isRetroactive: true) == nil)
+        check("retro: «he» → shouldConvert(minLen:1, retro) → nil (valid EN)",
+              AutoSwitcher.shouldConvert("he", minLength: 1, isRetroactive: true) == nil)
+        check("retro: «is» → shouldConvert(minLen:1, retro) → nil (valid EN)",
+              AutoSwitcher.shouldConvert("is", minLength: 1, isRetroactive: true) == nil)
+        // Non-builtin multi-char retroactive: still converts if orig is misspelled
+        check("retro: «f» (single-char) → «а»",
+              AutoSwitcher.shouldConvert("f", minLength: 1, isRetroactive: true)?.converted == "а")
+
+        // --- Scenario 31: retroactive walk stops at valid multi-char word ---
+        // "by ghbdtn" + space → "ghbdtn" triggers, retroactive tries "by".
+        // "by" is valid English → origMisspelled → nil → stops.
+        let d31 = AutoSwitcher.evaluateAutoConvert(buffer: "by ghbdtn", boundaryChar: " ")
+        check("integ: «by ghbdtn» → converts «ghbdtn» only (by is valid EN)", d31 != nil)
+        check("integ: «by ghbdtn» → «привет» (retroactive stopped at «by»)", d31?.convertedText == "привет")
+        check("integ: «by ghbdtn» → wordCount 1", d31?.wordCount == 1)
+
         // Restore state
         AutoSwitcher.enWords = savedEN
         AutoSwitcher.ruWords = savedRU

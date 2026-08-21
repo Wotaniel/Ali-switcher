@@ -346,10 +346,10 @@ enum AutoSwitcher {
     /// 5. Converted is correctly spelled in the target language.
     ///    If NSSpellChecker doesn't recognize the converted text (e.g. "adguard.com"
     ///    is not a dictionary word) but it matches a domain pattern → accept anyway.
-    /// 6. If minLength ≥ 2: original must be misspelled in its own language.
-    ///    If minLength == 1 (retroactive): skip this check — NSSpellChecker
-    ///    considers all single letters "valid" (e.g. "f" is not misspelled),
-    ///    so we rely on the fact that the main word already proved wrong layout.
+    /// 6. Original must be misspelled in its own language (for words with
+    ///    count ≥ 2). Single-char words skip this check — NSSpellChecker
+    ///    considers all single letters "valid", so we rely on the fact that
+    ///    the main word already proved wrong layout.
     static func shouldConvert(_ word: String, minLength: Int = minWordLength, isRetroactive: Bool = false) -> (converted: String, direction: SwitchDirection)? {
         // 1) Too short
         guard word.count >= minLength else { return nil }
@@ -416,9 +416,13 @@ enum AutoSwitcher {
             ? ("en", "ru")    // Latin word → Cyrillic; check EN misspelled, RU valid
             : ("ru", "en")   // Cyrillic word → Latin;  check RU misspelled, EN valid
 
-        // For retroactive checks (minLength == 1): skip origMisspelled check,
-        // because NSSpellChecker considers single letters "valid" in EN.
-        if minLength >= 2 {
+        // origMisspelled check: is the word misspelled in its own language?
+        // If it IS valid in its own language → it was typed intentionally → don't convert.
+        // Skip ONLY for single-char words (NSSpellChecker considers all single
+        // letters "valid" in EN, so the check is meaningless for them).
+        // Multi-char retroactive words MUST be checked — otherwise valid English
+        // words like "by" (→ "ин") get incorrectly converted retroactively.
+        if word.count >= 2 {
             let origMisspelled = checker.checkSpelling(
                 of: word, startingAt: 0,
                 language: origLang, wrap: false,

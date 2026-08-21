@@ -32,54 +32,31 @@ enum AutoSwitcher {
     // Built-in lists are ALWAYS checked (can't be removed by user).
 
     /// Common English short words that should NEVER be auto-converted.
-    /// Includes single-char words ("I", "a") that replaced englishSingleCharWords.
-    static let builtinEnWords: Set<String> = [
-        // Single-char
-        "I", "a", "i",
-        // 2-char
-        "am", "an", "as", "at", "be", "by", "do", "go", "he", "if", "in",
-        "is", "it", "me", "my", "no", "of", "on", "or", "so", "to",
-        "up", "us", "we",
-        // 3-char
-        "all", "and", "any", "are", "but", "can", "day", "did", "end",
-        "for", "get", "got", "had", "has", "her", "him", "his", "how",
-        "its", "let", "man", "may", "new", "not", "now", "off", "old",
-        "one", "our", "out", "own", "run", "say", "see", "set", "she",
-        "the", "too", "two", "use", "was", "way", "who", "why", "yes",
-        "yet", "you",
-        // 4-char (common)
-        "been", "came", "does", "each", "find", "from", "have", "here",
-        "into", "just", "like", "made", "many", "more", "much", "must",
-        "name", "only", "over", "some", "such", "than", "that", "them",
-        "then", "there", "these", "they", "this", "upon", "want", "well",
-        "were", "what", "when", "will", "with", "your",
-        // Common abbreviations
-        "ok", "ex", "ie", "eg", "vs", "etc", "jan", "feb", "mar", "apr",
-        "jun", "jul", "aug", "sep", "oct", "nov", "dec",
-    ]
+    /// Loaded from builtin_words_en.txt (Contents/Resources/).
+    /// Only 1-3 char words: longer words are handled by NSSpellChecker.
+    /// Falls back to empty set if file is missing (e.g. running from CLI).
+    static let builtinEnWords: Set<String> = loadBuiltinWords("builtin_words_en")
 
     /// Common Russian short words that should NEVER be auto-converted.
-    /// Includes words that NSSpellChecker sometimes rejects (colloquial,
-    /// short forms, particles).
-    static let builtinRuWords: Set<String> = [
-        // Single-char
-        "а", "в", "и", "к", "о", "с", "у", "я",
-        // 2-char
-        "бы", "вы", "да", "за", "ли", "на", "не", "ни", "но",
-        "он", "от", "по", "ну", "со", "то", "ту", "ты", "же",
-        // 3-char
-        "без", "вам", "вас", "все", "для", "ещё", "или", "имя",
-        "как", "мне", "моя", "наш", "него", "ней", "нет", "них",
-        "оба", "она", "они", "оно", "под", "при", "про", "сам",
-        "так", "там", "тем", "том", "тот", "тут", "уже", "что",
-        "это", "эту", "эти", "их",
-        // 4-char (common)
-        "быть", "ведь", "весь", "вот", "всё", "всех",
-        "где", "если", "есть", "еще", "зачем", "значит",
-        "когда", "кроме", "кто", "лишь", "между", "меня",
-        "могу", "может", "моё", "мой", "над", "нам", "неё",
-        "нельзя", "ним", "обед", "одно", "около",
-    ]
+    /// Loaded from builtin_words_ru.txt (Contents/Resources/).
+    /// Only 1-3 char words: longer words are handled by NSSpellChecker.
+    /// Falls back to empty set if file is missing (e.g. running from CLI).
+    static let builtinRuWords: Set<String> = loadBuiltinWords("builtin_words_ru")
+
+    /// Loads builtin word list from a .txt file in the app bundle.
+    /// One word per line; lines starting with # are comments.
+    private static func loadBuiltinWords(_ name: String) -> Set<String> {
+        guard let url = Bundle.main.url(forResource: name, withExtension: "txt"),
+              let content = try? String(contentsOf: url, encoding: .utf8) else {
+            log("⚠  builtin: \(name).txt not found — using empty set")
+            return []
+        }
+        let words = Set(content.split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && !$0.hasPrefix("#") })
+        log("builtin: \(name).txt → \(words.count) words")
+        return words
+    }
 
     /// Characters that mark word boundaries (trigger a check).
     /// IMPORTANT: only "universal" punctuation — characters that are NOT
@@ -146,8 +123,9 @@ enum AutoSwitcher {
     /// In retroactive mode, builtins are SKIPPED — if the user was already
     /// typing in the wrong layout, even common words should be converted.
     static func isBuiltinWord(_ word: String) -> Bool {
-        if isWordLatin(word) { return builtinEnWords.contains(word) }
-        return builtinRuWords.contains(word)
+        let lower = word.lowercased()
+        if isWordLatin(word) { return builtinEnWords.contains(lower) }
+        return builtinRuWords.contains(lower)
     }
 
     /// Regex for domain names (adguard.com, example.org, sub.domain.io).

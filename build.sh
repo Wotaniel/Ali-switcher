@@ -38,6 +38,8 @@ lipo -create -output "$STAGE/AliSwitcher" "$STAGE/AliSwitcher-arm64" "$STAGE/Ali
 
 cp "$STAGE/AliSwitcher" "$STAGE/app/Contents/MacOS/AliSwitcher"
 cp build/AliSwitcher.icns "$STAGE/app/Contents/Resources/AliSwitcher.icns"
+cp Sources/AliSwitcher/builtin_words_en.txt "$STAGE/app/Contents/Resources/builtin_words_en.txt"
+cp Sources/AliSwitcher/builtin_words_ru.txt "$STAGE/app/Contents/Resources/builtin_words_ru.txt"
 cp uninstall.sh "$STAGE/app/Contents/Resources/uninstall.sh"
 
 cat > "$STAGE/app/Contents/Info.plist" <<PLIST

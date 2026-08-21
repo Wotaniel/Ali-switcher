@@ -80,15 +80,19 @@ open build/AliSwitcher.app
 ## Отладка
 
 ```bash
-build/AliSwitcher --test      # самопроверка: выделение фрагмента + AXValue
-build/AliSwitcher --layouts   # список доступных раскладок в системе
-build/AliSwitcher             # запуск из терминала (лог в консоль)
+build/AliSwitcher.app/Contents/MacOS/AliSwitcher --test     # 232 самопроверки
+build/AliSwitcher.app/Contents/MacOS/AliSwitcher --layouts  # список раскладок
+build/AliSwitcher.app/Contents/MacOS/AliSwitcher             # запуск из терминала
 ```
+
+Тесты покрывают: транслитерацию (ЙЦУКЕН↔QWERTY), границы фрагмента (ChunkFinder),
+карту клавиш (KeyEvents), edge-cases автоконвертации, единый алгоритм
+`findConversionRange` (авто + ручная конвертация).
 
 ## Установка (рекомендуемый способ — DMG)
 
 ```bash
-open build/AliSwitcher.dmg
+open dist/AliSwitcher.dmg
 ```
 
 Откроется окно «AliSwitcher» с иконкой приложения и папкой Applications —
@@ -145,8 +149,8 @@ Apple Developer Program) — тогда приложение открывает�
 
 - `build.sh` — сборка и подпись идут в `/tmp` (вне iCloud), готовый `.app`
   копируется в `build/`.
-- `make-installer.sh` — staging и сборка пакета тоже в `/tmp`, затем пакет
-  копируется в `build/`.
+- `make-dmg.sh` — staging в `/tmp`, DMG собирается, затем копируется в
+  `dist/`.
 
 **Правила, чтобы не наступить на грабли:**
 
@@ -161,21 +165,45 @@ Apple Developer Program) — тогда приложение открывает�
 
 ## Настройка
 
-Константы в `Sources/AliSwitcher/main.swift`:
+Константы в `Sources/AliSwitcher/main.swift` (enum `Timing`):
 
 | Константа | Значение | Что регулирует |
 |---|---|---|
 | `kDoubleShiftInterval` | 0.25 c | максимальная пауза между двумя Shift |
-| `kClipboardRestoreDelay` | 0.3 c | когда вернуть буфер обмена |
-| `kFallbackReadDelay` | 0.08 c | пауза перед чтением текста в фолбэк-методе |
+| `Timing.backspaceDelay` | 0.008 c | пауза между Backspace |
+| `Timing.typeDelay` | 0.01 c | пауза между нажатиями клавиш |
+| `Timing.layoutSwitchDelay` | 0.05 c | пауза после переключения раскладки |
+| `Timing.autoConvertDelay` | 0.02 c | пауза перед backspace в авто-конвертации |
+| `Timing.clipboardWait` | 0.15 c | ожидание копирования в буфер |
+| `Timing.clipboardRestore` | 0.4 c | задержка перед восстановлением буфера |
 
 Правило границы фрагмента — в `Sources/AliSwitcher/ChunkFinder.swift`.
+Логика конвертации (авто + ручная) — в `Sources/AliSwitcher/AutoSwitcher.swift` →
+`findConversionRange(in:isManual:)`.
+
+## Возможности
+
+- **Двойной Shift** на выделенном тексте → конвертация через буфер (Cmd+C/V)
+- **Авто-конвертация** (Punto style): при нажатии пробела/знака препинания
+  слово автоматически проверяется и конвертируется (вкл/выкл в меню)
+- **Undo**: двойной Shift сразу после авто-конвертации отменяет её
+- **Auto-learn**: отмена авто-конвертации добавляет слово в список исключений
+  (больше не конвертируется)
+- **Два списка слов**: English (Latin) и Russian (Cyrillic), независимы.
+  Редактируются через меню иконки «RU»
+- **Ретроактивная конвертация**: если до последнего слова были другие
+  слова в той же раскладке — все они конвертируются
+- **Защита паролей**: secure fields не слушаются и не трогаются
+- **Generation token**: асинхронные callback'и проверяют актуальность
+  перед изменением состояния (защита от race conditions)
 
 ## Ограничения (осознанно)
 
-- Направление определяется по большинству букв; если текст набран правильно,
+- Направление определяется по последнему слову; если текст набран правильно,
   двойной Shift всё равно сконвертирует его в другую раскладку (это toggle —
   повторный двойной Shift вернёт обратно, как в Punto).
-- Поля, которые не отдают текст через Accessibility, получают фолбэк
-  «одно слово» (Shift+Option+← может не работать в терминалах).
+- Поля, которые не отдают текст через Accessibility, используют буфер набора
+  (tracking through keystrokes) — работает в любом приложении.
 - Только RU/EN, только стандартные раскладки (US / Russian).
+- Однобуквенные слова не тригерят авто-конвертацию (недостаточно сигнала),
+  но конвертируются ретроактивно и вручную.

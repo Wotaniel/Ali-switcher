@@ -74,7 +74,10 @@ enum KeyEvents {
         "H": (4, true), "G": (5, true), "Z": (6, true), "X": (7, true),
         "C": (8, true), "V": (9, true), "B": (11, true), "Q": (12, true),
         "W": (13, true), "E": (14, true), "R": (15, true), "Y": (16, true),
-        "T": (17, true), "!": (18, true), "@": (19, true), "#": (20, true),
+        "T": (17, true), "O": (31, true), "U": (32, true), "I": (34, true),
+        "P": (35, true), "L": (37, true), "J": (38, true), "K": (40, true),
+        "N": (45, true), "M": (46, true),
+        "!": (18, true), "@": (19, true), "#": (20, true),
         "$": (21, true), "^": (22, true), "%": (23, true), "+": (24, true),
         "(": (25, true), "&": (26, true), "_": (27, true), "*": (28, true),
         ")": (29, true), "}": (30, true), "{": (33, true), "|": (42, true),
@@ -85,6 +88,40 @@ enum KeyEvents {
     /// Can this character be typed (does it have a QWERTY key)?
     static func canType(_ qwertyChar: Character) -> Bool {
         qwerty[qwertyChar] != nil
+    }
+
+    /// Can every character in text be typed CORRECTLY via the QWERTY map?
+    ///
+    /// Two conditions:
+    /// 1. Every char must have a QWERTY key (emoji, non-standard punctuation → false)
+    /// 2. Script consistency: when typing in Russian layout, all letters must
+    ///    be Cyrillic (enOnSameKey maps them to QWERTY keys). A Latin letter
+    ///    in Russian text would be mistyped (pressing 'h' in RU → 'р', not 'h').
+    ///    Same in reverse: a Cyrillic letter in English text has no QWERTY key.
+    ///
+    /// BUG #2 fix: universal typeability pre-check. If false → clipboard paste.
+    static func isFullyTypeable(_ text: String, toRussian: Bool) -> Bool {
+        for ch in text {
+            if ch.isLetter {
+                if toRussian {
+                    // Letter must be Cyrillic — enOnSameKey finds its QWERTY key.
+                    guard let source = Translit.enOnSameKey(ch), qwerty[source] != nil else {
+                        return false  // Latin letter in Russian text → can't type correctly
+                    }
+                } else {
+                    // Letter must be Latin — it IS the QWERTY key.
+                    if qwerty[ch] == nil {
+                        return false  // Cyrillic letter in English text → can't type
+                    }
+                }
+            } else {
+                // Non-letter (space, punctuation, digit): must have a QWERTY key.
+                if qwerty[ch] == nil {
+                    return false  // Emoji, non-standard punctuation → can't type
+                }
+            }
+        }
+        return true
     }
 
     /// Types the text with keys in the CURRENT (already switched) layout.
@@ -111,9 +148,22 @@ enum KeyEvents {
         let source: Character = (toRussian ? Translit.enOnSameKey(ch) : nil) ?? ch
         if let (keyCode, shift) = qwerty[source] {
             post(keyCode: keyCode, flags: shift ? [.maskShift] : [])
+        } else {
+            log("⚠  typeNext: cannot type «\(ch)» (source «\(source)» not in qwerty map)")
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + Timing.typeDelay) {
             typeNext(chars, index: index + 1, toRussian: toRussian, completion: completion)
         }
+    }
+
+    /// Replays buffered characters after replacement. Same as type() but
+    /// without the initial layoutSwitchDelay — the layout is already set.
+    static func replay(_ text: String, toRussian: Bool, completion: (() -> Void)? = nil) {
+        let chars = Array(text)
+        guard !chars.isEmpty else {
+            completion?()
+            return
+        }
+        typeNext(chars, index: 0, toRussian: toRussian, completion: completion)
     }
 }

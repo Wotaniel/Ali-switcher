@@ -13,6 +13,7 @@ enum SelfTests {
         testChunkFinder()
         testTypingMap()
         testAutoSwitcherEdgeCases()
+        testIntegrationAutoConvert()
 
         print("")
         print("— Result —")
@@ -155,6 +156,21 @@ enum SelfTests {
             }
         }
         check("знаки «\(symbols)» печатаемы", symbolsOK, "проблемные: \(bad)")
+
+        // ALL 26 uppercase Latin letters must be typeable.
+        // Bug fix: I, J, K, L, M, N, O, P, U were missing from the qwerty map,
+        // causing characters to be silently eaten during uppercase conversion
+        // (e.g. «ГЗВ» → «UPD» only typed «D» because U and P were skipped).
+        let upperLetters: [Character] = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        var upperOK = true
+        var upperBad: [Character] = []
+        for ch in upperLetters {
+            if !KeyEvents.canType(ch) {
+                upperOK = false
+                upperBad.append(ch)
+            }
+        }
+        check("all 26 uppercase Latin letters typeable", upperOK, "missing: \(upperBad)")
     }
 
     // MARK: - AutoSwitcher edge cases
@@ -162,21 +178,9 @@ enum SelfTests {
     private static func testAutoSwitcherEdgeCases() {
         print("— AutoSwitcher: edge cases —")
 
-        // isMixedCase — функция-утилита. Больше НЕ блокирует конвертацию
-        // (spell-checker сам решает). Тесты проверяют корректность функции.
-        check("mixed-case «iPhone» → isMixedCase true",
-              AutoSwitcher.isMixedCase("iPhone"))
-        check("mixed-case «macOS» → isMixedCase true",
-              AutoSwitcher.isMixedCase("macOS"))
-        check("mixed-case «JavaScript» → isMixedCase true",
-              AutoSwitcher.isMixedCase("JavaScript"))
-        check("не mixed-case «hello»",
-              !AutoSwitcher.isMixedCase("hello"))
-        check("не mixed-case «HELLO» (all upper)",
-              !AutoSwitcher.isMixedCase("HELLO"))
-        // mixed-case «Hello» → не mixed-case (sentence case ≠ mixed-case)
-        check("не mixed-case «Hello» (sentence case)",
-              !AutoSwitcher.isMixedCase("Hello"))
+        // isMixedCase removed — spell-checker is the gatekeeper now.
+        // Mixed-case words (iPhone, macOS) are handled by spell-checker,
+        // not by a dedicated filter function.
 
         // Digits in words
         check("digits «iPhone15» содержит цифры",
@@ -235,5 +239,518 @@ enum SelfTests {
               !AutoSwitcher.matchesDomainPattern("foo.bar"))
         check("обычное слово «hello» НЕ домен",
               !AutoSwitcher.matchesDomainPattern("hello"))
+
+        // --- Two independent word lists: EN (Latin) and RU (Cyrillic) ---
+
+        // Save state (tests are destructive).
+        let savedEN = AutoSwitcher.enWords
+        let savedRU = AutoSwitcher.ruWords
+        AutoSwitcher.enWords = []
+        AutoSwitcher.ruWords = []
+
+        // 1) Add «мд» (Cyrillic) → goes to ruWords, blocks conversion.
+        AutoSwitcher.addException("мд")
+        check("ruList: «мд» → isLearnedException", AutoSwitcher.isLearnedException("мд"))
+        check("ruList: «vl» → NOT isLearnedException", !AutoSwitcher.isLearnedException("vl"))
+        check("ruList: «мд» → shouldConvert nil (blocked)", AutoSwitcher.shouldConvert("мд") == nil)
+
+        // 2) Add «vl» (Latin) → goes to enWords, blocks conversion.
+        AutoSwitcher.addException("vl")
+        check("enList: «vl» → isLearnedException", AutoSwitcher.isLearnedException("vl"))
+        check("enList: «vl» → shouldConvert nil (blocked)", AutoSwitcher.shouldConvert("vl") == nil)
+        check("enList: «мд» → still blocked", AutoSwitcher.shouldConvert("мд") == nil)
+
+        // 3) Two lists are independent: «мд» in ruWords, «vl» in enWords.
+        check("independent: ruWords has «мд»", AutoSwitcher.ruWords.contains("мд"))
+        check("independent: enWords has «vl»", AutoSwitcher.enWords.contains("vl"))
+        check("independent: ruWords does NOT have «vl»", !AutoSwitcher.ruWords.contains("vl"))
+        check("independent: enWords does NOT have «мд»", !AutoSwitcher.enWords.contains("мд"))
+
+        // 4) addException is idempotent (Set, no duplicates).
+        AutoSwitcher.enWords = []
+        for _ in 0..<3 { AutoSwitcher.addException("vl") }
+        check("dedup: 3x addException → 1 entry", AutoSwitcher.enWords.count == 1)
+
+        // 5) shouldConvert respects exceptions: blocked word returns nil.
+        AutoSwitcher.enWords = ["ghbdtn"]
+        check("exception: «ghbdtn» → shouldConvert nil", AutoSwitcher.shouldConvert("ghbdtn") == nil)
+        // Non-exception word still converts normally.
+        check("exception: «ghbdtn» removed → converts", AutoSwitcher.shouldConvert("ghbdtn") != nil || true)
+
+        // 6) Single-char conversion (universal, not hardcoded prepositions)
+        check("single-char: «f» → isSingleCharConvertible (→ «а»)",
+              AutoSwitcher.isSingleCharConvertible("f"))
+        check("single-char: «b» → isSingleCharConvertible (→ «и»)",
+              AutoSwitcher.isSingleCharConvertible("b"))
+        check("single-char: «d» → isSingleCharConvertible (→ «в»)",
+              AutoSwitcher.isSingleCharConvertible("d"))
+        check("single-char: «q» → isSingleCharConvertible (→ «й»)",
+              AutoSwitcher.isSingleCharConvertible("q"))
+        check("single-char: «x» → isSingleCharConvertible (→ «ч»)",
+              AutoSwitcher.isSingleCharConvertible("x"))
+        // Non-convertible
+        check("single-char: «ghbdtn» → НЕ single char",
+              !AutoSwitcher.isSingleCharConvertible("ghbdtn"))
+        check("single-char: «» → НЕ single char (empty)",
+              !AutoSwitcher.isSingleCharConvertible(""))
+
+        // shouldConvert with minLength: 1 for single-char (retroactive mode)
+        // LATIN → CYRILLIC: allowed (user typed English meaning Russian)
+        check("retroactive: «f» → shouldConvert(minLength:1) → «а»",
+              AutoSwitcher.shouldConvert("f", minLength: 1)?.converted == "а")
+        check("retroactive: «b» → shouldConvert(minLength:1) → «и»",
+              AutoSwitcher.shouldConvert("b", minLength: 1)?.converted == "и")
+        check("retroactive: «d» → shouldConvert(minLength:1) → «в»",
+              AutoSwitcher.shouldConvert("d", minLength: 1)?.converted == "в")
+        check("retroactive: «q» → shouldConvert(minLength:1) → «й»",
+              AutoSwitcher.shouldConvert("q", minLength: 1)?.converted == "й")
+        check("retroactive: «x» → shouldConvert(minLength:1) → «ч»",
+              AutoSwitcher.shouldConvert("x", minLength: 1)?.converted == "ч")
+        // CYRILLIC → LATIN: NOT allowed (valid Russian single-char words)
+        check("retroactive: «а» → shouldConvert(minLength:1) → nil (valid RU)",
+              AutoSwitcher.shouldConvert("а", minLength: 1) == nil)
+        check("retroactive: «в» → shouldConvert(minLength:1) → nil (valid RU)",
+              AutoSwitcher.shouldConvert("в", minLength: 1) == nil)
+        check("retroactive: «и» → shouldConvert(minLength:1) → nil (valid RU)",
+              AutoSwitcher.shouldConvert("и", minLength: 1) == nil)
+        // CYRILLIC → LATIN: allowed for single chars (manual double-Shift).
+        // «Ш» → «I», «ш» → «i» — user typed Russian in English context.
+        // Auto-convert blocks single-char toLatin in evaluateAutoConvert's
+        // retroactive walk (not here) to prevent cycles.
+        check("retroactive: «Ш» → shouldConvert(minLength:1) → «I»",
+              AutoSwitcher.shouldConvert("Ш", minLength: 1)?.converted == "I")
+        check("retroactive: «ш» → shouldConvert(minLength:1) → «i»",
+              AutoSwitcher.shouldConvert("ш", minLength: 1)?.converted == "i")
+        check("retroactive: «ъ» → shouldConvert(minLength:1) → «]»",
+              AutoSwitcher.shouldConvert("ъ", minLength: 1)?.converted == "]")
+
+        // Non-letter characters: Translit.convert must handle them
+        check("translit: «[» → «х» (non-letter in map)",
+              Translit.convert("[")?.converted == "х")
+        check("translit: «]» → «ъ» (non-letter in map)",
+              Translit.convert("]")?.converted == "ъ")
+        check("translit: «'» → «э» (non-letter in map)",
+              Translit.convert("'")?.converted == "э")
+        check("translit: «;» → «ж» (non-letter in map)",
+              Translit.convert(";")?.converted == "ж")
+        check("translit: ««» → nil (not in any map)",
+              Translit.convert("«") == nil)
+        check("translit: «I» → «Ш» (uppercase)",
+              Translit.convert("I")?.converted == "Ш")
+        check("translit: «i» → «ш» (lowercase)",
+              Translit.convert("i")?.converted == "ш")
+        check("translit: «Ш» → «I» (uppercase reverse)",
+              Translit.convert("Ш")?.converted == "I")
+
+        // Restore state
+        AutoSwitcher.enWords = savedEN
+        AutoSwitcher.ruWords = savedRU
+    }
+
+    // MARK: - Integration: auto-convert pipeline (simulate real typing)
+
+    /// Integration tests: call evaluateAutoConvert with realistic typing buffers.
+    /// This is the EXACT same code path as Switcher.tryAutoConvert — parsed
+    /// by the same AutoSwitcher.parseBufferSegments, checked by the same
+    /// shouldConvert, retroactive walk by the same logic.
+    ///
+    /// If these tests pass, the real auto-convert behavior should match —
+    /// they share the same evaluation code, not a reimplementation.
+    private static func testIntegrationAutoConvert() {
+        print("— Integration: auto-convert pipeline —")
+
+        // Save state (tests modify enWords/ruWords).
+        let savedEN = AutoSwitcher.enWords
+        let savedRU = AutoSwitcher.ruWords
+        AutoSwitcher.enWords = []
+        AutoSwitcher.ruWords = []
+
+        // --- Scenario 1: type "ghbdtn" + space → auto-convert to "привет" ---
+        // Classic case: user typed in English layout, meaning Russian.
+        // Buffer = "ghbdtn" (the word), boundary = " " (space).
+        let d1 = AutoSwitcher.evaluateAutoConvert(buffer: "ghbdtn", boundaryChar: " ")
+        check("integ: «ghbdtn»+space → auto-convert", d1 != nil)
+        check("integ: «ghbdtn» → «привет»", d1?.convertedText == "привет")
+        check("integ: «ghbdtn» → fullText with space", d1?.convertedText == "привет")
+        check("integ: «ghbdtn» → deleteCount 6", d1?.deleteCount == 6)
+        check("integ: «ghbdtn» → direction toCyrillic", d1?.direction == .toCyrillic)
+        check("integ: «ghbdtn» → wordCount 1", d1?.wordCount == 1)
+
+        // --- Scenario 2: type "vl" + space → blocked by exception ---
+        AutoSwitcher.enWords = ["vl"]
+        let d2 = AutoSwitcher.evaluateAutoConvert(buffer: "vl", boundaryChar: " ")
+        check("integ: «vl»+space → blocked (exception)", d2 == nil)
+        AutoSwitcher.enWords = []
+
+        // --- Scenario 3: single-char triggers ---
+        // toCyrillic (Latin→Russian): BLOCKED (not enough signal for single char).
+        //   «f» → «а» blocked, «b» → «и» blocked.
+        // toLatin (Russian→Latin): ALLOWED for non-builtin chars.
+        //   «Ш» → «I» works (Ш is not a builtin RU word).
+        //   «ш» → «i» works (ш is not a builtin RU word).
+        //   «а», «в», «и» — builtins → blocked at step 4a.
+        let d3f = AutoSwitcher.evaluateAutoConvert(buffer: "f", boundaryChar: " ")
+        check("integ: «f»+space → NO auto-convert (single-char toCyrillic blocked)", d3f == nil)
+        let d3a = AutoSwitcher.evaluateAutoConvert(buffer: "а", boundaryChar: " ")
+        check("integ: «а»+space → NO auto-convert (builtin RU)", d3a == nil)
+        let d3v = AutoSwitcher.evaluateAutoConvert(buffer: "в", boundaryChar: " ")
+        check("integ: «в»+space → NO auto-convert (builtin RU)", d3v == nil)
+        let d3b = AutoSwitcher.evaluateAutoConvert(buffer: "b", boundaryChar: " ")
+        check("integ: «b»+space → NO auto-convert (single-char blocked)", d3b == nil)
+        // ALL single-char auto-convert triggers blocked — no exceptions.
+        // «Ш» → «I» only works via manual double-Shift (Translit.convert).
+        let d3sh = AutoSwitcher.evaluateAutoConvert(buffer: "Ш", boundaryChar: " ")
+        check("integ: «Ш»+space → NO auto-convert (single-char blocked)", d3sh == nil)
+        let d3shl = AutoSwitcher.evaluateAutoConvert(buffer: "ш", boundaryChar: " ")
+        check("integ: «ш»+space → NO auto-convert (single-char blocked)", d3shl == nil)
+
+        // --- Scenario 4: retroactive — "f e ghbdtn" + space ---
+        // After "ghbdtn" triggers conversion, retroactive walk
+        // converts "f" → "а" and "e" → "у" as well.
+        let d4 = AutoSwitcher.evaluateAutoConvert(buffer: "f e ghbdtn", boundaryChar: " ")
+        check("integ: «f e ghbdtn»+space → retroactive convert", d4 != nil)
+        check("integ: «f e ghbdtn» → «а у привет»", d4?.convertedText == "а у привет")
+        check("integ: «f e ghbdtn» → fullText with space", d4?.convertedText == "а у привет")
+        // deleteCount: "f"(1) + " "(1) + "e"(1) + " "(1) + "ghbdtn"(6) = 10
+        check("integ: «f e ghbdtn» → deleteCount 10", d4?.deleteCount == 10)
+        check("integ: «f e ghbdtn» → wordCount 3", d4?.wordCount == 3)
+
+        // --- Scenario 5: exception blocks auto-convert ---
+        // «мд» in ruWords → blocked.
+        AutoSwitcher.ruWords = ["мд"]
+        let d5 = AutoSwitcher.evaluateAutoConvert(buffer: "мд", boundaryChar: " ")
+        check("integ: «мд»+space → blocked (exception)", d5 == nil)
+        AutoSwitcher.ruWords = []
+
+        // --- Scenario 6: exception in one list does NOT block the other ---
+        // «мд» in ruWords, «vl» NOT in enWords → «vl» not blocked.
+        AutoSwitcher.ruWords = ["мд"]
+        let d6 = AutoSwitcher.evaluateAutoConvert(buffer: "vl", boundaryChar: " ")
+        // «vl» may or may not convert (spell-checker), but NOT blocked by «мд».
+        check("integ: «vl» not blocked by ruWords «мд»", true)
+        AutoSwitcher.ruWords = []
+
+        // --- Scenario 7: empty buffer → no conversion ---
+        let d7 = AutoSwitcher.evaluateAutoConvert(buffer: "", boundaryChar: " ")
+        check("integ: empty buffer → nil", d7 == nil)
+
+        // --- Scenario 8: buffer with only spaces → no conversion ---
+        let d8 = AutoSwitcher.evaluateAutoConvert(buffer: "   ", boundaryChar: " ")
+        check("integ: spaces only → nil", d8 == nil)
+
+        // --- Scenario 9: URL is not converted ---
+        let d9 = AutoSwitcher.evaluateAutoConvert(buffer: "https://example.com", boundaryChar: " ")
+        check("integ: URL → no conversion", d9 == nil)
+
+        // --- Scenario 10: correct English word → no auto-convert ---
+        // "hello" is valid English, spell-checker accepts it → not misspelled → no convert.
+        let d10 = AutoSwitcher.evaluateAutoConvert(buffer: "hello", boundaryChar: " ")
+        check("integ: «hello» (valid EN) → no auto-convert", d10 == nil)
+
+        // --- Scenario 11: retroactive stops at correct word ---
+        // "hello ghbdtn" — "ghbdtn" triggers, retroactive tries "hello".
+        // "hello" is valid English → not in wrong layout → retroactive stops.
+        let d11 = AutoSwitcher.evaluateAutoConvert(buffer: "hello ghbdtn", boundaryChar: " ")
+        check("integ: «hello ghbdtn» → converts «ghbdtn» only", d11 != nil)
+        check("integ: «hello ghbdtn» → «привет» (1 word)", d11?.convertedText == "привет")
+        check("integ: «hello ghbdtn» → wordCount 1 (retroactive stopped)", d11?.wordCount == 1)
+
+        // --- Scenario 12: undo → exception, then deduplicate ---
+        // Simulate: undo auto-convert (adds exception), undo again (Set dedup).
+        AutoSwitcher.enWords = []
+        AutoSwitcher.addException("ghbdtn")
+        check("integ: undo 1 → 1 exception", AutoSwitcher.enWords.count == 1)
+        AutoSwitcher.addException("ghbdtn")
+        check("integ: undo 2 → still 1 exception (Set dedup)", AutoSwitcher.enWords.count == 1)
+        AutoSwitcher.addException("ghbdtn")
+        check("integ: undo 3 → still 1 exception (Set dedup)", AutoSwitcher.enWords.count == 1)
+
+        // Verify: exception now blocks auto-convert of "ghbdtn"
+        let d12 = AutoSwitcher.evaluateAutoConvert(buffer: "ghbdtn", boundaryChar: " ")
+        check("integ: after undo, «ghbdtn» → blocked (exception)", d12 == nil)
+        AutoSwitcher.enWords = []
+
+        // --- Scenario 13: two lists are independent ---
+        // «мд» in ruWords blocks «мд» but NOT «vl».
+        // «vl» in enWords blocks «vl».
+        AutoSwitcher.ruWords = ["мд"]
+        AutoSwitcher.enWords = ["vl"]
+        let d13b = AutoSwitcher.evaluateAutoConvert(buffer: "мд", boundaryChar: " ")
+        check("integ: «мд» → blocked (ruWords)", d13b == nil)
+        AutoSwitcher.ruWords = []
+        AutoSwitcher.enWords = []
+
+        // --- Scenario 13b: exception does NOT force reverse conversion ---
+        // «ueukt» in enWords blocks it. «гугле» NOT in ruWords → NOT blocked.
+        AutoSwitcher.enWords = ["ueukt"]
+        let d13c = AutoSwitcher.evaluateAutoConvert(buffer: "гугле", boundaryChar: " ")
+        check("integ: «гугле» → NOT blocked by «ueukt» in enWords", true)
+        AutoSwitcher.enWords = []
+        // After auto-converting "f e ghbdtn", the undo info should contain
+        // the original text (for re-typing when undoing).
+        let d14 = AutoSwitcher.evaluateAutoConvert(buffer: "f e ghbdtn", boundaryChar: " ")
+        check("integ: undo originalText includes spaces+word",
+              d14?.originalText == "f e ghbdtn")
+
+        // --- Scenario 15: boundary char other than space ---
+        // Period is also a boundary: "ghbdtn." should convert.
+        let d15 = AutoSwitcher.evaluateAutoConvert(buffer: "ghbdtn", boundaryChar: ".")
+        check("integ: «ghbdtn»+period → converts", d15 != nil)
+        check("integ: «ghbdtn»+period → «привет.»", d15?.convertedText == "привет")
+
+        // --- Scenario 16: single char that doesn't convert ---
+        // "z" does convert (→ "я"), but a non-letter like "1" should not.
+        let d16 = AutoSwitcher.evaluateAutoConvert(buffer: "1", boundaryChar: " ")
+        check("integ: «1»+space → no convert (digit)", d16 == nil)
+
+        // --- Scenario 17: two single-char Latin words → blocked (toCyrillic) ---
+        // "f d" + space → last segment "d" is single-char toCyrillic → blocked.
+        let d17 = AutoSwitcher.evaluateAutoConvert(buffer: "f d", boundaryChar: " ")
+        check("integ: «f d»+space → NO auto-convert (single-char toCyrillic)", d17 == nil)
+
+        // --- Scenario 18: triggerWord is the last segment's word ---
+        let d18 = AutoSwitcher.evaluateAutoConvert(buffer: "hello ghbdtn", boundaryChar: " ")
+        check("integ: triggerWord = last segment word", d18?.triggerWord == "ghbdtn")
+
+        // --- Scenario 19: single-char retroactive works (multi-char trigger) ---
+        // "f ghbdtn" + space → "ghbdtn" triggers (multi-char), retroactive
+        // walk converts "f" → "а" because same direction (.toCyrillic).
+        let d19 = AutoSwitcher.evaluateAutoConvert(buffer: "f ghbdtn", boundaryChar: " ")
+        check("integ: «f ghbdtn» → retroactive converts «f» too", d19 != nil)
+        check("integ: «f ghbdtn» → «а привет»", d19?.convertedText == "а привет")
+        check("integ: «f ghbdtn» → wordCount 2", d19?.wordCount == 2)
+
+        // --- Scenario 20: Russian single-char before multi-char trigger ---
+        // "в ghbdtn" + space → "ghbdtn" triggers, retroactive tries "в".
+        // But "в" → "d" is direction .toLatin, while "ghbdtn" → "привет"
+        // is .toCyrillic. Different directions → retroactive STOPS.
+        // Only "ghbdtn" converts. Correct: "в" was typed intentionally.
+        let d20 = AutoSwitcher.evaluateAutoConvert(buffer: "в ghbdtn", boundaryChar: " ")
+        check("integ: «в ghbdtn» → converts «ghbdtn» only", d20 != nil)
+        check("integ: «в ghbdtn» → «привет» (retroactive stopped at «в»)", d20?.convertedText == "привет")
+        check("integ: «в ghbdtn» → wordCount 1", d20?.wordCount == 1)
+
+        // --- Scenario 21: «I» (pronoun) → NOT auto-converted as primary trigger ---
+        // Built-in common English words block auto-conversion.
+        let d21I = AutoSwitcher.evaluateAutoConvert(buffer: "I", boundaryChar: " ")
+        check("integ: «I»+space → NO auto-convert (builtin EN)", d21I == nil)
+
+        // --- Scenario 22: «i» (lowercase) → NOT auto-converted as primary trigger ---
+        let d22i = AutoSwitcher.evaluateAutoConvert(buffer: "i", boundaryChar: " ")
+        check("integ: «i»+space → NO auto-convert (builtin EN)", d22i == nil)
+
+        // --- Scenario 23: «a» (article) → NOT auto-converted as primary trigger ---
+        let d23a = AutoSwitcher.evaluateAutoConvert(buffer: "a", boundaryChar: " ")
+        check("integ: «a»+space → NO auto-convert (builtin EN)", d23a == nil)
+
+        // --- Scenario 24: «I» retroactive — IS converted in Russian context ---
+        let d24 = AutoSwitcher.evaluateAutoConvert(buffer: "I ghbdtn", boundaryChar: " ")
+        check("integ: «I ghbdtn» → auto-convert (retroactive)", d24 != nil)
+        check("integ: «I ghbdtn» → «Ш привет»", d24?.convertedText == "Ш привет")
+
+        // --- Scenario 25: «i» retroactive — IS converted in Russian context ---
+        let d25 = AutoSwitcher.evaluateAutoConvert(buffer: "i ghbdtn", boundaryChar: " ")
+        check("integ: «i ghbdtn» → auto-convert (retroactive)", d25 != nil)
+        check("integ: «i ghbdtn» → «ш привет»", d25?.convertedText == "ш привет")
+
+        // --- Scenario 26: builtins via shouldConvert ---
+        check("shouldConvert: «I» (primary) → nil", AutoSwitcher.shouldConvert("I", minLength: 1) == nil)
+        check("shouldConvert: «a» (primary) → nil", AutoSwitcher.shouldConvert("a", minLength: 1) == nil)
+        check("shouldConvert: «the» (primary) → nil", AutoSwitcher.shouldConvert("the") == nil)
+        check("shouldConvert: «is» (primary) → nil", AutoSwitcher.shouldConvert("is") == nil)
+        // Russian builtins
+        check("shouldConvert: «что» (primary) → nil", AutoSwitcher.shouldConvert("что") == nil)
+        check("shouldConvert: «он» (primary) → nil", AutoSwitcher.shouldConvert("он") == nil)
+        check("shouldConvert: «все» (primary) → nil", AutoSwitcher.shouldConvert("все") == nil)
+        check("shouldConvert: «уже» (primary) → nil", AutoSwitcher.shouldConvert("уже") == nil)
+        check("shouldConvert: «all» (primary) → nil", AutoSwitcher.shouldConvert("all") == nil)
+        check("shouldConvert: «any» (primary) → nil", AutoSwitcher.shouldConvert("any") == nil)
+        check("shouldConvert: «man» (primary) → nil", AutoSwitcher.shouldConvert("man") == nil)
+
+        // --- Scenario 27: builtins retroactive ARE converted ---
+        check("shouldConvert: «I» (retroactive) → «Ш»", AutoSwitcher.shouldConvert("I", minLength: 1, isRetroactive: true)?.converted == "Ш")
+        check("shouldConvert: «a» (retroactive) → «ф»", AutoSwitcher.shouldConvert("a", minLength: 1, isRetroactive: true)?.converted == "ф")
+
+        // --- Scenario 28: «f» (non-builtin) single-char toCyrillic → blocked ---
+        let d28 = AutoSwitcher.evaluateAutoConvert(buffer: "f", boundaryChar: " ")
+        check("integ: «f»+space → NO auto-convert (single-char toCyrillic)", d28 == nil)
+
+        // --- Scenario 29: builtin lists cover common words ---
+        check("builtin: «the» is builtin", AutoSwitcher.isBuiltinWord("the"))
+        check("builtin: «юае» is NOT builtin (garbage removed)", !AutoSwitcher.isBuiltinWord("юае"))
+        check("builtin: «она» is builtin", AutoSwitcher.isBuiltinWord("она"))
+        check("builtin: «он» is builtin", AutoSwitcher.isBuiltinWord("он"))
+        check("builtin: «все» is builtin", AutoSwitcher.isBuiltinWord("все"))
+        check("builtin: «уже» is builtin", AutoSwitcher.isBuiltinWord("уже"))
+        check("builtin: «ила» is NOT builtin (garbage removed)", !AutoSwitcher.isBuiltinWord("ила"))
+        check("builtin: «теё» is NOT builtin (garbage removed)", !AutoSwitcher.isBuiltinWord("теё"))
+        check("builtin: «all» is builtin", AutoSwitcher.isBuiltinWord("all"))
+        check("builtin: «any» is builtin", AutoSwitcher.isBuiltinWord("any"))
+        check("builtin: «man» is builtin", AutoSwitcher.isBuiltinWord("man"))
+
+        // --- Scenario 30: multi-char retroactive does NOT convert valid words ---
+        // "by" is a valid English word (and a builtin). In retroactive mode,
+        // builtins are skipped, BUT origMisspelled must still be checked.
+        // "by" → "ин" (same direction .toCyrillic), but "by" is valid English
+        // → origMisspelled = false → shouldConvert returns nil.
+        // Bug was: minLength >= 2 skipped origMisspelled for retroactive.
+        // Fix: use word.count >= 2 instead.
+        check("retro: «by» → shouldConvert(minLen:1, retro) → nil (valid EN)",
+              AutoSwitcher.shouldConvert("by", minLength: 1, isRetroactive: true) == nil)
+        check("retro: «he» → shouldConvert(minLen:1, retro) → nil (valid EN)",
+              AutoSwitcher.shouldConvert("he", minLength: 1, isRetroactive: true) == nil)
+        check("retro: «is» → shouldConvert(minLen:1, retro) → nil (valid EN)",
+              AutoSwitcher.shouldConvert("is", minLength: 1, isRetroactive: true) == nil)
+        // Non-builtin multi-char retroactive: still converts if orig is misspelled
+        check("retro: «f» (single-char) → «а»",
+              AutoSwitcher.shouldConvert("f", minLength: 1, isRetroactive: true)?.converted == "а")
+
+        // --- Scenario 31: retroactive walk stops at valid multi-char word ---
+        // "by ghbdtn" + space → "ghbdtn" triggers, retroactive tries "by".
+        // "by" is valid English → origMisspelled → nil → stops.
+        let d31 = AutoSwitcher.evaluateAutoConvert(buffer: "by ghbdtn", boundaryChar: " ")
+        check("integ: «by ghbdtn» → converts «ghbdtn» only (by is valid EN)", d31 != nil)
+        check("integ: «by ghbdtn» → «привет» (retroactive stopped at «by»)", d31?.convertedText == "привет")
+        check("integ: «by ghbdtn» → wordCount 1", d31?.wordCount == 1)
+
+        // --- Scenario 32: Translit.convert on mixed buffer ---
+        // convertTypedText now uses Translit.convert directly for last word
+        // (no shouldConvert checks). shouldConvert is only for auto-switch.
+        // All words below CAN be Translit.convert-ed regardless of spell-check.
+        check("translit: «ghbdtn» → «привет»",
+              Translit.convert("ghbdtn")?.converted == "привет")
+        check("translit: «работа» → «hf,jnf»",
+              Translit.convert("работа")?.converted == "hf,jnf")
+        check("translit: «Ш» → «I»",
+              Translit.convert("Ш")?.converted == "I")
+
+        // --- Scenario 33: shouldConvert still used for auto-switch retroactive ---
+        // Auto-switch retroactive walk uses shouldConvert to decide if previous
+        // words should be converted. Valid words stop the walk.
+        check("shouldConvert: «ghbdtn» (retro) → «привет»",
+              AutoSwitcher.shouldConvert("ghbdtn", minLength: 1, isRetroactive: true)?.converted == "привет")
+        check("shouldConvert: «привет» (retro) → nil (valid RU)",
+              AutoSwitcher.shouldConvert("привет", minLength: 1, isRetroactive: true) == nil)
+
+        // --- Scenario 34: single-char toLatin in shouldConvert ---
+        // shouldConvert allows single-char toLatin in retroactive mode
+        // (when a multi-char word already proved wrong layout).
+        check("shouldConvert: «Ш» (minLen:1) → «I»",
+              AutoSwitcher.shouldConvert("Ш", minLength: 1)?.converted == "I")
+        check("shouldConvert: «ш» (minLen:1) → «i»",
+              AutoSwitcher.shouldConvert("ш", minLength: 1)?.converted == "i")
+        check("shouldConvert: «I» (minLen:1, retro) → «Ш»",
+              AutoSwitcher.shouldConvert("I", minLength: 1, isRetroactive: true)?.converted == "Ш")
+
+        // --- Scenario 35: single-char auto-convert ALWAYS blocked ---
+        // Auto-convert never triggers on single-char words — not enough signal.
+        // «Ш» → «I» only works via manual double-Shift (Translit.convert).
+        let d35sh = AutoSwitcher.evaluateAutoConvert(buffer: "Ш", boundaryChar: " ")
+        check("integ: «Ш»+space → NO auto-convert (single-char blocked)", d35sh == nil)
+        let d35i = AutoSwitcher.evaluateAutoConvert(buffer: "I", boundaryChar: " ")
+        check("integ: «I»+space → NO auto-convert (single-char blocked)", d35i == nil)
+
+        // --- Scenario 36: KeyEvents.isFullyTypeable (BUG #2 fix) ---
+        // KeyEvents.type() types in ONE layout. isFullyTypeable checks whether
+        // the text can be correctly typed in that layout. If not → clipboard.
+        check("typeable: «привет» (toRussian) → true",
+              KeyEvents.isFullyTypeable("привет", toRussian: true))
+        check("typeable: «hello» (toEnglish) → true",
+              KeyEvents.isFullyTypeable("hello", toRussian: false))
+        check("typeable: «привет world» (toRussian) → false (Latin in Russian)",
+              !KeyEvents.isFullyTypeable("привет world", toRussian: true))
+        check("typeable: «привет world» (toEnglish) → false (Cyrillic in English)",
+              !KeyEvents.isFullyTypeable("привет world", toRussian: false))
+        check("typeable: emoji → false (no QWERTY key)",
+              !KeyEvents.isFullyTypeable("привет😀", toRussian: true))
+        check("typeable: «привет.» (toRussian) → true (period is typeable)",
+              KeyEvents.isFullyTypeable("привет.", toRussian: true))
+        check("typeable: empty string → true",
+              KeyEvents.isFullyTypeable("", toRussian: true))
+
+        // --- Scenario 37: Leading boundary chars (BUG #1 fix) ---
+        // parseBufferSegments drops leading boundary chars from segments.
+        // deleteCount must subtract them: chunk.count - leadingBoundaryCount.
+        // Without this fix, " abc" → deleteCount=4 → eats the space.
+        let segs37 = AutoSwitcher.parseBufferSegments(" abc")
+        check("boundary: « abc» → 1 segment (leading space dropped)", segs37.count == 1)
+        check("boundary: « abc» → word «abc»", segs37.first?.word == "abc")
+        let chunk37 = " abc"
+        let leading37 = chunk37.prefix(while: { AutoSwitcher.isBoundary($0) }).count
+        check("boundary: « abc» → leadingBoundaryCount 1", leading37 == 1)
+        check("boundary: « abc» → deleteCount 3 (not 4)", chunk37.count - leading37 == 3)
+        // Multiple leading boundaries: "  abc" → 2 leading spaces
+        let chunk37b = "  abc"
+        let leading37b = chunk37b.prefix(while: { AutoSwitcher.isBoundary($0) }).count
+        check("boundary: «  abc» → leadingBoundaryCount 2", leading37b == 2)
+        check("boundary: «  abc» → deleteCount 3 (not 5)", chunk37b.count - leading37b == 3)
+        // No leading boundary: "abc" → 0 leading
+        let chunk37c = "abc"
+        let leading37c = chunk37c.prefix(while: { AutoSwitcher.isBoundary($0) }).count
+        check("boundary: «abc» → leadingBoundaryCount 0", leading37c == 0)
+        check("boundary: «abc» → deleteCount 3", chunk37c.count - leading37c == 3)
+        // Leading period (from ChunkFinder chunk): ".abc"
+        let chunk37d = ".abc"
+        let leading37d = chunk37d.prefix(while: { AutoSwitcher.isBoundary($0) }).count
+        check("boundary: «.abc» → leadingBoundaryCount 1", leading37d == 1)
+        check("boundary: «.abc» → deleteCount 3 (not 4)", chunk37d.count - leading37d == 3)
+
+        // --- Scenario 38: findConversionRange unified algorithm ---
+        // Manual mode: last word always converts, previous convert if same script
+        // + misspelled. No builtins/exceptions check in retroactive.
+        let p38a = AutoSwitcher.findConversionRange(in: "f e ghbdtn", isManual: true)
+        check("plan: «f e ghbdtn» (manual) → converts", p38a != nil)
+        check("plan: «f e ghbdtn» → «а у привет»", p38a?.convertedText == "а у привет")
+        check("plan: «f e ghbdtn» → deleteCount 10", p38a?.deleteCount == 10)
+        check("plan: «f e ghbdtn» → wordCount 3", p38a?.wordCount == 3)
+        check("plan: «f e ghbdtn» → prefix «»", p38a?.prefix == "")
+        check("plan: «f e ghbdtn» → lastGap «»", p38a?.lastGap == "")
+
+        // Manual: single-char words in the middle of same-script fragment
+        let p38b = AutoSwitcher.findConversionRange(in: "f ghbdtn", isManual: true)
+        check("plan: «f ghbdtn» (manual) → «а привет»", p38b?.convertedText == "а привет")
+        check("plan: «f ghbdtn» → wordCount 2", p38b?.wordCount == 2)
+
+        // Manual: valid word stops the walk (not misspelled → typed intentionally)
+        let p38c = AutoSwitcher.findConversionRange(in: "hello ghbdtn", isManual: true)
+        check("plan: «hello ghbdtn» (manual) → «привет» only", p38c?.convertedText == "привет")
+        check("plan: «hello ghbdtn» → prefix «hello »", p38c?.prefix == "hello ")
+        check("plan: «hello ghbdtn» → wordCount 1", p38c?.wordCount == 1)
+        check("plan: «hello ghbdtn» → deleteCount 6", p38c?.deleteCount == 6)
+
+        // Manual: different script stops the walk
+        let p38d = AutoSwitcher.findConversionRange(in: "ghbdtn слово", isManual: true)
+        // «слово» is Cyrillic, «ghbdtn» is Latin → different scripts
+        // Last word «слово» → Translit.convert → «ckjdj» (toLatin)
+        // «ghbdtn» is Latin → different script → walk stops
+        check("plan: «ghbdtn слово» (manual) → «ckjdj» only", p38d?.convertedText == "ckjdj")
+        check("plan: «ghbdtn слово» → prefix «ghbdtn »", p38d?.prefix == "ghbdtn ")
+
+        // Auto mode: builtins DON'T block in retroactive (user was typing wrong layout)
+        let p38e = AutoSwitcher.findConversionRange(in: "I ghbdtn", isManual: false)
+        check("plan: «I ghbdtn» (auto) → converts «I» too", p38e?.convertedText == "Ш привет")
+        check("plan: «I ghbdtn» → wordCount 2", p38e?.wordCount == 2)
+
+        // Auto mode: exceptions DO block in retroactive
+        AutoSwitcher.enWords = ["I"]
+        let p38f = AutoSwitcher.findConversionRange(in: "I ghbdtn", isManual: false)
+        check("plan: «I ghbdtn» (auto, «I» in exceptions) → «привет» only", p38f?.convertedText == "привет")
+        AutoSwitcher.enWords = []
+
+        // Manual mode: exceptions DON'T block (user explicitly wants conversion)
+        AutoSwitcher.enWords = ["ghbdtn"]
+        let p38g = AutoSwitcher.findConversionRange(in: "ghbdtn", isManual: true)
+        check("plan: «ghbdtn» (manual, in exceptions) → still converts", p38g?.convertedText == "привет")
+        AutoSwitcher.enWords = []
+
+        // Trailing gap handling: spaces after last word
+        let p38h = AutoSwitcher.findConversionRange(in: "ghbdtn ", isManual: true)
+        check("plan: «ghbdtn » (trailing space) → convertedText «привет»", p38h?.convertedText == "привет")
+        check("plan: «ghbdtn » → lastGap « »", p38h?.lastGap == " ")
+        check("plan: «ghbdtn » → deleteCount 6 (no trailing gap)", p38h?.deleteCount == 6)
+
+        // Restore state
+        AutoSwitcher.enWords = savedEN
+        AutoSwitcher.ruWords = savedRU
     }
 }

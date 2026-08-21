@@ -241,23 +241,14 @@ enum AutoSwitcher {
         let segments = parseBufferSegments(buffer)
 
         // The last segment's word is what we check first.
-        // Single-char words are allowed as triggers ONLY in the toCyrillic
-        // direction (Latin → Russian). This lets "f" → "а" work (the user
-        // typed Latin meaning Russian). In the reverse direction (Russian →
-        // Latin), single chars like "а", "в", "и" are valid Russian words and
-        // must NOT be auto-converted to English ("f", "d", "b").
-        // NSSpellChecker considers all single letters "valid" in both
-        // languages, so direction + builtin check is the way to distinguish intent.
-        // Latin → Cyrillic: always allowed (e.g. "f" → "а").
-        // Cyrillic → Latin: allowed only if NOT a builtin Russian word
-        // (e.g. "Ш" → "I" is OK, but "а" → "f" is blocked).
-        // Multi-char words always go through the full spell-checker.
+        // ONLY multi-char words can trigger auto-convert (minWordLength = 2).
+        // Single-char auto-convert triggers were removed — they create cycles
+        // (e.g. «О» → «J» → «О» → «J»…) and false positives, because
+        // NSSpellChecker considers all single letters "valid" in both languages.
+        // Single chars are still converted in RETROACTIVE mode (when a
+        // previous multi-char word already proved wrong layout).
         guard let lastSegment = segments.last,
-              lastSegment.word.count >= minWordLength
-                || (isSingleCharConvertible(lastSegment.word)
-                    && (Translit.convert(lastSegment.word)?.direction == .toCyrillic
-                        || (Translit.convert(lastSegment.word)?.direction == .toLatin
-                            && !isBuiltinWord(lastSegment.word)))) else {
+              lastSegment.word.count >= minWordLength else {
             return nil
         }
 
@@ -266,12 +257,7 @@ enum AutoSwitcher {
             return nil
         }
 
-        // For single-char trigger words (Latin → Cyrillic direction only,
-        // checked above), use minLength: 1 so shouldConvert doesn't reject
-        // them at step 1. The spell-checker bypass in step 4b handles the
-        // direction check (toCyrillic allowed, toLatin blocked).
-        let minLen = lastSegment.word.count == 1 ? 1 : minWordLength
-        guard let result = shouldConvert(lastSegment.word, minLength: minLen, isRetroactive: false) else { return nil }
+        guard let result = shouldConvert(lastSegment.word, isRetroactive: false) else { return nil }
 
         // Retroactive: walk backwards from the last word and convert all previous
         // words that are also in the wrong layout (same direction).
@@ -408,19 +394,16 @@ enum AutoSwitcher {
             return nil  // user undid this conversion before — don't repeat
         }
 
-        // 4c) Single-char words (minLength == 1):
-        // Latin → Russian (toCyrillic): always allowed (user typed English
-        // meaning Russian, e.g. «f» → «а»).
-        // Russian → Latin (toLatin): allowed ONLY for non-builtin Russian
-        // chars. Common Russian single-char words («а», «в», «и», «к», «о»,
-        // «с», «у», «я») must NOT be converted to Latin. But «Ш» → «I»
-        // should work because Ш alone is not a Russian word.
+        // 4c) Single-char words (minLength == 1, retroactive only):
+        // Latin → Cyrillic (toCyrillic): allowed (e.g. «f» → «а»).
+        // Cyrillic → Latin (toLatin): BLOCKED — creates cycles and false
+        // positives (e.g. «О» → «J» → «О» → «J»…). Single-char triggers
+        // are also blocked in evaluateAutoConvert, so this only affects
+        // retroactive checks where the main word proved wrong layout.
+        // Manual conversion (double-Shift) is NOT affected — it uses
+        // Translit.convert directly without shouldConvert checks.
         if word.count == 1, minLength <= 1 {
             if result.direction == .toCyrillic {
-                return result
-            }
-            // Russian → Latin: allow if NOT a builtin Russian word
-            if !isBuiltinWord(word) {
                 return result
             }
             return nil

@@ -298,13 +298,14 @@ enum SelfTests {
               AutoSwitcher.shouldConvert("в", minLength: 1) == nil)
         check("retroactive: «и» → shouldConvert(minLength:1) → nil (valid RU)",
               AutoSwitcher.shouldConvert("и", minLength: 1) == nil)
-        // CYRILLIC → LATIN: allowed for non-builtin Russian chars
-        check("retroactive: «Ш» → shouldConvert(minLength:1) → «I»",
-              AutoSwitcher.shouldConvert("Ш", minLength: 1)?.converted == "I")
-        check("retroactive: «ш» → shouldConvert(minLength:1) → «i»",
-              AutoSwitcher.shouldConvert("ш", minLength: 1)?.converted == "i")
-        check("retroactive: «ъ» → shouldConvert(minLength:1) → «]»",
-              AutoSwitcher.shouldConvert("ъ", minLength: 1)?.converted == "]")
+        // CYRILLIC → LATIN: NOT allowed for single chars (creates cycles).
+        // Manual double-Shift still converts these via Translit.convert directly.
+        check("retroactive: «Ш» → shouldConvert(minLength:1) → nil (toLatin blocked)",
+              AutoSwitcher.shouldConvert("Ш", minLength: 1) == nil)
+        check("retroactive: «ш» → shouldConvert(minLength:1) → nil (toLatin blocked)",
+              AutoSwitcher.shouldConvert("ш", minLength: 1) == nil)
+        check("retroactive: «ъ» → shouldConvert(minLength:1) → nil (toLatin blocked)",
+              AutoSwitcher.shouldConvert("ъ", minLength: 1) == nil)
 
         // Non-letter characters: Translit.convert must handle them
         check("translit: «[» → «х» (non-letter in map)",
@@ -364,19 +365,19 @@ enum SelfTests {
         check("integ: «vl»+space → blocked (exception)", d2 == nil)
         AutoSwitcher.enWords = []
 
-        // --- Scenario 3: single-char trigger directionality ---
-        // Latin single chars DO trigger (toCyrillic): "f" → "а", "b" → "и".
-        // Russian single chars do NOT trigger (toLatin blocked): "а" → "f" blocked.
+        // --- Scenario 3: single-char triggers BLOCKED (both directions) ---
+        // Single-char auto-convert triggers create cycles and false positives.
+        // Both Latin→RU and RU→Latin single-char triggers are blocked.
+        // Single chars still convert RETROACTIVELY (see Scenario 4, 19, 24, 25).
+        // Manual double-Shift conversion still works (uses Translit.convert directly).
         let d3f = AutoSwitcher.evaluateAutoConvert(buffer: "f", boundaryChar: " ")
-        check("integ: «f»+space → auto-convert (Latin→RU)", d3f != nil)
-        check("integ: «f» → «а»", d3f?.convertedText == "а")
+        check("integ: «f»+space → NO auto-convert (single-char blocked)", d3f == nil)
         let d3a = AutoSwitcher.evaluateAutoConvert(buffer: "а", boundaryChar: " ")
-        check("integ: «а»+space → NO auto-convert (RU→Latin blocked)", d3a == nil)
+        check("integ: «а»+space → NO auto-convert (single-char blocked)", d3a == nil)
         let d3v = AutoSwitcher.evaluateAutoConvert(buffer: "в", boundaryChar: " ")
-        check("integ: «в»+space → NO auto-convert (RU→Latin blocked)", d3v == nil)
+        check("integ: «в»+space → NO auto-convert (single-char blocked)", d3v == nil)
         let d3b = AutoSwitcher.evaluateAutoConvert(buffer: "b", boundaryChar: " ")
-        check("integ: «b»+space → auto-convert (Latin→RU)", d3b != nil)
-        check("integ: «b» → «и»", d3b?.convertedText == "и")
+        check("integ: «b»+space → NO auto-convert (single-char blocked)", d3b == nil)
 
         // --- Scenario 4: retroactive — "f e ghbdtn" + space ---
         // After "ghbdtn" triggers conversion, retroactive walk
@@ -477,13 +478,10 @@ enum SelfTests {
         let d16 = AutoSwitcher.evaluateAutoConvert(buffer: "1", boundaryChar: " ")
         check("integ: «1»+space → no convert (digit)", d16 == nil)
 
-        // --- Scenario 17: two single-char Latin words → both convert ---
-        // "f d" + space → "d" triggers (Latin→RU toCyrillic), retroactive
-        // converts "f" → "а" same direction. Result "а в".
+        // --- Scenario 17: two single-char Latin words → blocked (single-char) ---
+        // "f d" + space → last segment "d" is single-char → blocked.
         let d17 = AutoSwitcher.evaluateAutoConvert(buffer: "f d", boundaryChar: " ")
-        check("integ: «f d»+space → auto-convert both (Latin→RU)", d17 != nil)
-        check("integ: «f d» → «а в»", d17?.convertedText == "а в")
-        check("integ: «f d» → wordCount 2", d17?.wordCount == 2)
+        check("integ: «f d»+space → NO auto-convert (single-char blocked)", d17 == nil)
 
         // --- Scenario 18: triggerWord is the last segment's word ---
         let d18 = AutoSwitcher.evaluateAutoConvert(buffer: "hello ghbdtn", boundaryChar: " ")
@@ -544,10 +542,9 @@ enum SelfTests {
         check("shouldConvert: «I» (retroactive) → «Ш»", AutoSwitcher.shouldConvert("I", minLength: 1, isRetroactive: true)?.converted == "Ш")
         check("shouldConvert: «a» (retroactive) → «ф»", AutoSwitcher.shouldConvert("a", minLength: 1, isRetroactive: true)?.converted == "ф")
 
-        // --- Scenario 28: «f» (non-builtin) still converts as primary ---
+        // --- Scenario 28: «f» (non-builtin) single-char → blocked ---
         let d28 = AutoSwitcher.evaluateAutoConvert(buffer: "f", boundaryChar: " ")
-        check("integ: «f»+space → auto-convert (not builtin)", d28 != nil)
-        check("integ: «f» → «а»", d28?.convertedText == "а")
+        check("integ: «f»+space → NO auto-convert (single-char blocked)", d28 == nil)
 
         // --- Scenario 29: builtin lists cover common words ---
         check("builtin: «the» is builtin", AutoSwitcher.isBuiltinWord("the"))

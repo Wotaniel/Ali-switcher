@@ -130,9 +130,7 @@ final class Switcher: NSObject, NSWindowDelegate {
         autoModeEnabled = UserDefaults.standard.bool(forKey: "autoModeEnabled")
         // Auto-learn defaults to true (enabled on first launch).
         autoLearnExceptions = UserDefaults.standard.object(forKey: "autoLearnExceptions") as? Bool ?? true
-        // Load unified learned words (exceptions + dictionary pairs).
-        // Format: "formA\tformB\texc" or "formA\tformB\tdict"
-        // Migrate old data if needed.
+        // Load user word lists (two independent lists: EN and RU).
         loadLearnedWords()
         setupMainMenu()
         setupStatusItem()
@@ -241,12 +239,18 @@ final class Switcher: NSObject, NSWindowDelegate {
         menu.addItem(autoLearn)
         autoLearnItem = autoLearn
 
-        // Learned words editor (unified: exceptions + dictionary)
-        let wordsItem = NSMenuItem(title: "Words…",
-                                   action: #selector(showWordsEditor),
-                                   keyEquivalent: "")
-        wordsItem.target = self
-        menu.addItem(wordsItem)
+        // Two separate word lists: English (Latin) and Russian (Cyrillic)
+        let enWordsItem = NSMenuItem(title: "English Words…",
+                                     action: #selector(showEnglishWordsEditor),
+                                     keyEquivalent: "")
+        enWordsItem.target = self
+        menu.addItem(enWordsItem)
+
+        let ruWordsItem = NSMenuItem(title: "Russian Words…",
+                                     action: #selector(showRussianWordsEditor),
+                                     keyEquivalent: "")
+        ruWordsItem.target = self
+        menu.addItem(ruWordsItem)
         menu.addItem(.separator())
 
         // IMPORTANT: a background app has no first responder, so every menu item
@@ -368,47 +372,74 @@ final class Switcher: NSObject, NSWindowDelegate {
         log("auto-learn: \(autoLearnExceptions ? "ON" : "OFF")")
     }
 
-    // MARK: - Learned words editor (unified: exceptions + dictionary)
+    // MARK: - Word list editors (English & Russian)
 
-    private var wordsPanel: NSPanel?
-    private var wordsTextView: NSTextView?
+    private var enWordsPanel: NSPanel?
+    private var enWordsTextView: NSTextView?
+    private var ruWordsPanel: NSPanel?
+    private var ruWordsTextView: NSTextView?
 
-    @objc private func showWordsEditor() {
-        if let panel = wordsPanel {
+    @objc private func showEnglishWordsEditor() {
+        showWordsEditor(
+            lang: "English",
+            description: "English words — one per line.\n"
+                + "These block auto-conversion in Latin → Russian direction.",
+            panel: &enWordsPanel,
+            textView: &enWordsTextView,
+            isLatin: true
+        )
+    }
+
+    @objc private func showRussianWordsEditor() {
+        showWordsEditor(
+            lang: "Russian",
+            description: "Russian words — one per line.\n"
+                + "These block auto-conversion in Russian → Latin direction.",
+            panel: &ruWordsPanel,
+            textView: &ruWordsTextView,
+            isLatin: false
+        )
+    }
+
+    private func showWordsEditor(
+        lang: String,
+        description: String,
+        panel: inout NSPanel?,
+        textView: inout NSTextView?,
+        isLatin: Bool
+    ) {
+        if let existingPanel = panel {
             NSApp.setActivationPolicy(.regular)
             NSRunningApplication.current.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
-            panel.makeKeyAndOrderFront(nil)
+            existingPanel.makeKeyAndOrderFront(nil)
             return
         }
 
-        let panel = NSPanel(
+        let newPanel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 460, height: 400),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
         )
-        panel.title = "AliSwitcher: Learned Words"
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
-        panel.level = .floating
-        panel.isReleasedWhenClosed = false
-        panel.center()
+        newPanel.title = "AliSwitcher: \(lang) Words"
+        newPanel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+        newPanel.level = .floating
+        newPanel.isReleasedWhenClosed = false
+        newPanel.center()
 
         let content = NSView(frame: NSRect(x: 0, y: 0, width: 460, height: 400))
 
-        let label = NSTextField(wrappingLabelWithString:
-            "Learned word pairs (both languages). Format:\n"
-            + "! word1 word2  — exception (do NOT auto-convert)\n"
-            + "  word1 word2  — dictionary (always auto-convert)")
+        let label = NSTextField(wrappingLabelWithString: description)
         label.frame = NSRect(x: 16, y: 348, width: 428, height: 48)
         label.font = NSFont.systemFont(ofSize: 11)
         content.addSubview(label)
 
         let scrollView = NSScrollView(frame: NSRect(x: 16, y: 50, width: 428, height: 290))
-        let textView = NSTextView(frame: scrollView.bounds)
-        textView.isEditable = true
-        textView.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-        textView.autoresizingMask = [.width]
-        scrollView.documentView = textView
+        let newTextView = NSTextView(frame: scrollView.bounds)
+        newTextView.isEditable = true
+        newTextView.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        newTextView.autoresizingMask = [.width]
+        scrollView.documentView = newTextView
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = false
         content.addSubview(scrollView)
@@ -418,6 +449,8 @@ final class Switcher: NSObject, NSWindowDelegate {
                                   action: #selector(saveWordsFromEditor))
         saveButton.frame = NSRect(x: 16, y: 14, width: 80, height: 28)
         saveButton.keyEquivalent = "\r"
+        // tag identifies which language: 1 = English (Latin), 2 = Russian (Cyrillic)
+        saveButton.tag = isLatin ? 1 : 2
         content.addSubview(saveButton)
 
         let countLabel = NSTextField(labelWithString: "")
@@ -427,159 +460,122 @@ final class Switcher: NSObject, NSWindowDelegate {
         countLabel.tag = 999
         content.addSubview(countLabel)
 
-        panel.delegate = self
-        panel.contentView = content
-        wordsPanel = panel
-        wordsTextView = textView
+        newPanel.delegate = self
+        newPanel.contentView = content
+        panel = newPanel
+        textView = newTextView
 
-        populateWordsEditor()
-        updateWordsCount()
+        populateWordsEditor(isLatin: isLatin, textView: newTextView, panel: newPanel)
+        updateWordsCount(isLatin: isLatin, panel: newPanel)
 
         NSApp.setActivationPolicy(.regular)
         NSRunningApplication.current.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
-        panel.makeKeyAndOrderFront(nil)
+        newPanel.makeKeyAndOrderFront(nil)
     }
 
-    /// Populates the editor with current learned words.
-    /// Format: "! formA formB" for exceptions, "formA formB" for dictionary.
-    private func populateWordsEditor() {
-        let lines = AutoSwitcher.learnedWords.map { pair -> String in
-            let prefix = pair.isException ? "!" : " "
-            return "\(prefix) \(pair.formA) \(pair.formB)"
-        }
-        wordsTextView?.string = lines.sorted().joined(separator: "\n")
+    /// Populates the editor with words for the given language.
+    /// One word per line, sorted alphabetically.
+    private func populateWordsEditor(isLatin: Bool, textView: NSTextView, panel: NSPanel) {
+        let words = isLatin
+            ? AutoSwitcher.enWords.sorted()
+            : AutoSwitcher.ruWords.sorted()
+        textView.string = words.isEmpty ? "" : words.joined(separator: "\n")
     }
 
-    private func updateWordsCount() {
-        let count = AutoSwitcher.learnedWords.count
-        let view = wordsPanel?.contentView?.viewWithTag(999) as? NSTextField
-        view?.stringValue = count == 0 ? "No words" : "\(count) pair\(count == 1 ? "" : "s")"
+    private func updateWordsCount(isLatin: Bool, panel: NSPanel) {
+        let count = isLatin ? AutoSwitcher.enWords.count : AutoSwitcher.ruWords.count
+        let view = panel.contentView?.viewWithTag(999) as? NSTextField
+        view?.stringValue = count == 0 ? "No words" : "\(count) word\(count == 1 ? "" : "s")"
     }
 
-    @objc private func saveWordsFromEditor() {
-        let text = wordsTextView?.string ?? ""
-        var newPairs: [AutoSwitcher.LearnedWord] = []
+    @objc private func saveWordsFromEditor(_ sender: NSButton) {
+        let isLatin = sender.tag == 1
+        let textView = isLatin ? enWordsTextView : ruWordsTextView
+        let panel = isLatin ? enWordsPanel : ruWordsPanel
+        let text = textView?.string ?? ""
+
+        // Parse: one word per line.
+        var words: Set<String> = []
         for line in text.components(separatedBy: .newlines) {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard !trimmed.isEmpty else { continue }
-            let isException = trimmed.hasPrefix("!")
-            let body = isException ? String(trimmed.dropFirst()) : trimmed
-            let parts = body.split(whereSeparator: { $0.isWhitespace }).map { String($0) }
-            guard parts.count >= 2 else { continue }
-            newPairs.append(AutoSwitcher.LearnedWord(formA: parts[0], formB: parts[1], isException: isException))
+            let word = line.trimmingCharacters(in: .whitespaces)
+            guard !word.isEmpty else { continue }
+            words.insert(word)
         }
-        AutoSwitcher.learnedWords = newPairs
+
+        if isLatin {
+            AutoSwitcher.enWords = words
+        } else {
+            AutoSwitcher.ruWords = words
+        }
         saveLearnedWords()
-        log("words: saved \(AutoSwitcher.learnedWords.count) pairs")
-        updateWordsCount()
-        wordsPanel?.orderOut(nil)
+        log("words: saved \(words.count) \(isLatin ? "EN" : "RU") words")
+
+        // Refresh both editors if they're open
+        if let p = enWordsPanel, let tv = enWordsTextView {
+            populateWordsEditor(isLatin: true, textView: tv, panel: p)
+            updateWordsCount(isLatin: true, panel: p)
+        }
+        if let p = ruWordsPanel, let tv = ruWordsTextView {
+            populateWordsEditor(isLatin: false, textView: tv, panel: p)
+            updateWordsCount(isLatin: false, panel: p)
+        }
+
+        panel?.orderOut(nil)
         NSApp.setActivationPolicy(.accessory)
     }
 
-    // MARK: - Learned words (unified: exceptions + dictionary)
+    // MARK: - Learned words (two independent lists: EN and RU)
 
-    /// Loads learned word pairs from UserDefaults.
-    /// Also migrates old autoExceptions and customDictionary if present.
+    /// Loads two word lists from UserDefaults. Migrates old formats.
     private func loadLearnedWords() {
-        // Try new format first.
-        if let arr = UserDefaults.standard.array(forKey: "learnedWords") as? [String] {
-            let parsed = arr.compactMap { parseLearnedLine($0) }
-
-            // Deduplicate: remove entries for the same word pair.
-            // - Same type (exc/dict) in both directions → keep first, skip reversed.
-            // - Different types for the same pair in different directions → keep BOTH
-            //   (they serve different directions: "мд⇄vl exc" blocks «мд»,
-            //    "vl⇄мд dict" forces «vl» — formA-priority lookup handles both).
-            // - Exact duplicates → keep first.
-            var deduped: [AutoSwitcher.LearnedWord] = []
-            var seenSameType: Set<String> = []
-            for entry in parsed {
-                let normKey = [entry.formA, entry.formB].sorted().joined(separator: "\t")
-                let typeKey = "\(normKey)\t\(entry.isException ? "exc" : "dict")"
-                if seenSameType.contains(typeKey) { continue }
-                seenSameType.insert(typeKey)
-                deduped.append(entry)
-            }
-            AutoSwitcher.learnedWords = deduped
-
-            // If dedup removed entries, save the cleaned list.
-            if deduped.count < parsed.count {
-                saveLearnedWords()
-                log("learnedWords: deduplicated \(parsed.count) → \(deduped.count) entries")
-            }
-
-            if !AutoSwitcher.learnedWords.isEmpty { return }
+        // New format: two separate arrays.
+        if let en = UserDefaults.standard.array(forKey: "enWords") as? [String] {
+            AutoSwitcher.enWords = Set(en)
         }
-        // Migrate old formats.
-        // Use addLearnedPair for deduplication — if both autoExceptions
-        // and customDictionary had entries for the same word pair, only
-        // one survives (last one wins, but Exception takes priority since
-        // we add them last).
-        AutoSwitcher.learnedWords = []
-        if let oldDict = UserDefaults.standard.array(forKey: "customDictionary") as? [String] {
-            for word in oldDict {
-                if let result = Translit.convert(word), result.converted != word {
-                    let lw = AutoSwitcher.LearnedWord(formA: word, formB: result.converted, isException: false)
-                    AutoSwitcher.learnedWords.append(lw)
+        if let ru = UserDefaults.standard.array(forKey: "ruWords") as? [String] {
+            AutoSwitcher.ruWords = Set(ru)
+        }
+
+        // Migrate old "learnedWords" format (formA\tformB\texc/dict).
+        if let oldArr = UserDefaults.standard.array(forKey: "learnedWords") as? [String] {
+            for line in oldArr {
+                let parts = line.components(separatedBy: "\t")
+                guard parts.count >= 1 else { continue }
+                let word = parts[0]
+                if !word.isEmpty {
+                    AutoSwitcher.addException(word)
                 }
             }
-            UserDefaults.standard.removeObject(forKey: "customDictionary")
+            UserDefaults.standard.removeObject(forKey: "learnedWords")
+            saveLearnedWords()
+            log("migrated old learnedWords → enWords(\(AutoSwitcher.enWords.count)) + ruWords(\(AutoSwitcher.ruWords.count))")
         }
+
+        // Migrate very old formats.
         if let oldExc = UserDefaults.standard.array(forKey: "autoExceptions") as? [String] {
-            for word in oldExc {
-                if let result = Translit.convert(word), result.converted != word {
-                    // Remove any existing dictionary entry for this pair first.
-                    let fa = word, fb = result.converted
-                    AutoSwitcher.learnedWords.removeAll { $0.formA == fa || $0.formB == fa || $0.formA == fb || $0.formB == fb }
-                    AutoSwitcher.learnedWords.append(AutoSwitcher.LearnedWord(formA: word, formB: result.converted, isException: true))
-                }
-            }
+            for word in oldExc { AutoSwitcher.addException(word) }
             UserDefaults.standard.removeObject(forKey: "autoExceptions")
+            saveLearnedWords()
         }
-        if !AutoSwitcher.learnedWords.isEmpty { saveLearnedWords() }
+        if let oldDict = UserDefaults.standard.array(forKey: "customDictionary") as? [String] {
+            // Old dictionary words → just add as exceptions (block auto-convert).
+            for word in oldDict { AutoSwitcher.addException(word) }
+            UserDefaults.standard.removeObject(forKey: "customDictionary")
+            saveLearnedWords()
+        }
     }
 
-    /// Parses a stored line: "formA\tformB\texc" or "formA\tformB\tdict".
-    private func parseLearnedLine(_ line: String) -> AutoSwitcher.LearnedWord? {
-        let parts = line.components(separatedBy: "\t")
-        guard parts.count == 3 else { return nil }
-        let isException = parts[2] == "exc"
-        return AutoSwitcher.LearnedWord(formA: parts[0], formB: parts[1], isException: isException)
-    }
-
-    /// Saves learned word pairs to UserDefaults.
+    /// Saves two word lists to UserDefaults.
     private func saveLearnedWords() {
-        let arr = AutoSwitcher.learnedWords.map { "\($0.formA)\t\($0.formB)\t\($0.isException ? "exc" : "dict")" }
-        UserDefaults.standard.set(arr, forKey: "learnedWords")
+        UserDefaults.standard.set(Array(AutoSwitcher.enWords), forKey: "enWords")
+        UserDefaults.standard.set(Array(AutoSwitcher.ruWords), forKey: "ruWords")
     }
 
-    /// Adds a learned word pair. If either form already exists, replaces it.
-    /// NEVER creates duplicates — old matching entries are always removed first.
-    private func addLearnedPair(formA: String, formB: String, isException: Bool) {
-        // Remove any existing entry matching either form (dedup).
-        let beforeCount = AutoSwitcher.learnedWords.count
-        AutoSwitcher.learnedWords.removeAll { $0.formA == formA || $0.formB == formA || $0.formA == formB || $0.formB == formB }
-        let removedCount = beforeCount - AutoSwitcher.learnedWords.count
-
-        AutoSwitcher.learnedWords.append(AutoSwitcher.LearnedWord(formA: formA, formB: formB, isException: isException))
+    /// Adds a word to the appropriate exception list (auto-learn on undo).
+    private func learnException(_ word: String) {
+        AutoSwitcher.addException(word)
         saveLearnedWords()
-        let type = isException ? "exception" : "dictionary"
-        if removedCount > 0 {
-            log("\(type): «\(redact(formA))»⇄«\(redact(formB))» (replaced \(removedCount) old entr\(removedCount == 1 ? "y" : "ies"), total: \(AutoSwitcher.learnedWords.count))")
-        } else {
-            log("\(type): «\(redact(formA))»⇄«\(redact(formB))» (total: \(AutoSwitcher.learnedWords.count))")
-        }
-    }
-
-    /// Learns from manual conversion: adds word pairs as dictionary entries
-    /// (force-convert) so next time auto-convert handles them without spell-checker.
-    private func learnCustomDictionary(_ text: String) {
-        let words = text.split(whereSeparator: { !$0.isLetter }).map { String($0) }
-        for word in words where word.count >= AutoSwitcher.minWordLength {
-            if let result = Translit.convert(word), result.converted != word {
-                addLearnedPair(formA: word, formB: result.converted, isException: false)
-            }
-        }
+        log("exception: «\(redact(word))» (EN: \(AutoSwitcher.enWords.count), RU: \(AutoSwitcher.ruWords.count))")
     }
 
     /// Shows a modal window ABOVE everything, including full-screen apps:
@@ -696,17 +692,20 @@ final class Switcher: NSObject, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else { return }
         // Only restore accessory if no other panels are visible.
-        let wordsVisible = wordsPanel?.isVisible ?? false
+        let enWordsVisible = enWordsPanel?.isVisible ?? false
+        let ruWordsVisible = ruWordsPanel?.isVisible ?? false
         let permissionsVisible = permissionsPanel?.isVisible ?? false
         // windowWillClose fires BEFORE isVisible becomes false, so exclude
         // the window that's currently closing.
         let othersVisible: Bool
-        if window === wordsPanel {
-            othersVisible = permissionsVisible
+        if window === enWordsPanel {
+            othersVisible = ruWordsVisible || permissionsVisible
+        } else if window === ruWordsPanel {
+            othersVisible = enWordsVisible || permissionsVisible
         } else if window === permissionsPanel {
-            othersVisible = wordsVisible
+            othersVisible = enWordsVisible || ruWordsVisible
         } else {
-            othersVisible = wordsVisible || permissionsVisible
+            othersVisible = enWordsVisible || ruWordsVisible || permissionsVisible
         }
         if !othersVisible {
             NSApp.setActivationPolicy(.accessory)
@@ -982,64 +981,18 @@ final class Switcher: NSObject, NSWindowDelegate {
     private func tryAutoConvert(boundaryChar: String) -> Bool {
         guard !busy, !isReplacing else { return false }
 
-        // Parse the entire buffer into (word, gap) segments.
-        // Example: "f e ghbdtn" → [("f", " "), ("e", " "), ("ghbdtn", "")]
-        let segments = parseBufferSegments()
-
-        // The last segment's word is what we check first.
-        // Special case: 1-char words are allowed if they convert to a letter
-        // of the other script (universal — not limited to prepositions).
-        // Without this, typing "f" + space (meaning "а") never auto-converts.
-        guard let lastSegment = segments.last,
-              lastSegment.word.count >= AutoSwitcher.minWordLength
-                || AutoSwitcher.isSingleCharConvertible(lastSegment.word) else {
+        // Delegate to the pure function (shared with tests).
+        // This ensures the real code path and test code path are identical.
+        guard let decision = AutoSwitcher.evaluateAutoConvert(
+            buffer: typedBuffer, boundaryChar: boundaryChar
+        ) else {
             return false
         }
 
-        // Skip words in the exceptions list (learned from previous undos).
-        // Only blocks the original trigger direction (formA).
-        // e.g. undoing «мд»→«vl» blocks «мд», but «vl»→«мд» still works.
-        if let learned = AutoSwitcher.lookupLearned(lastSegment.word),
-           learned.isException, lastSegment.word == learned.formA {
-            return false
-        }
+        let toRussian = decision.direction == .toCyrillic
+        log("auto: «\(redact(decision.triggerWord))» → «\(redact(decision.convertedText))» (retroactive \(decision.wordCount) words, deleting \(decision.deleteCount))")
 
-        // For single-char prepositions, use minLength: 1 so shouldConvert
-        // doesn't reject them. Normal words use the default minWordLength.
-        let minLen = lastSegment.word.count == 1 ? 1 : AutoSwitcher.minWordLength
-        guard let result = AutoSwitcher.shouldConvert(lastSegment.word, minLength: minLen) else { return false }
-
-        // Retroactive: walk backwards from the last word and convert all previous
-        // words that are also in the wrong layout (same direction). We lower the
-        // threshold to 1 char since we already know the user was in the wrong layout.
-        var convertedText = result.converted
-        var deleteCount = lastSegment.word.count
-
-        var wordIndex = segments.count - 2
-        while wordIndex >= 0 {
-            let prevSeg = segments[wordIndex]
-            // The gap between previous word and the next word was already typed
-            // (it passed through as a boundary char). We need to include it.
-            let gap = segments[wordIndex].gap
-            if let prevResult = AutoSwitcher.shouldConvert(prevSeg.word, minLength: 1),
-               prevResult.direction == result.direction {
-                convertedText = prevResult.converted + gap + convertedText
-                deleteCount += prevSeg.word.count + gap.count
-                wordIndex -= 1
-            } else {
-                break  // Stop — this word is not in the wrong layout.
-            }
-        }
-
-        let toRussian = result.direction == .toCyrillic
-        log("auto: «\(redact(lastSegment.word))» → «\(redact(result.converted))» (retroactive \(segments.count - wordIndex - 1) words, deleting \(deleteCount))")
-
-        // Compute the original text (pre-conversion) for undo support.
-        var originalText = ""
-        for segIdx in (wordIndex + 1)..<segments.count {
-            originalText += segments[segIdx].word + segments[segIdx].gap
-        }
-        let fullConvertedText = convertedText + boundaryChar
+        let fullConvertedText = decision.fullConvertedText
 
         busy = true
         isReplacing = true
@@ -1053,7 +1006,7 @@ final class Switcher: NSObject, NSWindowDelegate {
 
         DispatchQueue.main.asyncAfter(deadline: .now() + Timing.autoConvertDelay) { [weak self] in
             guard let self else { return }
-            KeyEvents.backspace(count: deleteCount) { [weak self] in
+            KeyEvents.backspace(count: decision.deleteCount) { [weak self] in
                 guard let self else { return }
                 KeyEvents.type(fullConvertedText, toRussian: toRussian) { [weak self] in
                     guard let self else { return }
@@ -1062,16 +1015,16 @@ final class Switcher: NSObject, NSWindowDelegate {
                     self.replayPendingKeystrokes()
                     // Store undo info: double-Shift reverts this conversion.
                     self.lastAutoConvertInfo = (
-                        original: originalText + boundaryChar,
+                        original: decision.originalText + boundaryChar,
                         backspaceCount: fullConvertedText.count,
                         undoToRussian: !toRussian,
-                        triggerWord: lastSegment.word
+                        triggerWord: decision.triggerWord
                     )
                     // Also remember the word pair for delayed exception learning
                     // (survives real keystrokes, used by clipboard undo).
                     // Keep a list — a later auto-convert shouldn't erase an
                     // earlier pair the user might still undo.
-                    self.recentAutoConvertedWords.append((original: lastSegment.word, converted: result.converted))
+                    self.recentAutoConvertedWords.append((original: decision.triggerWord, converted: decision.convertedText))
                     if self.recentAutoConvertedWords.count > self.maxRecentAutoWords {
                         self.recentAutoConvertedWords.removeFirst()
                     }
@@ -1084,11 +1037,10 @@ final class Switcher: NSObject, NSWindowDelegate {
     /// Reverts the last auto-conversion: switches back to the original layout,
     /// backspaces the converted text, and retypes the original.
     private func undoAutoConvert(_ info: (original: String, backspaceCount: Int, undoToRussian: Bool, triggerWord: String)) {
-        // Self-learning: add the trigger word pair to exceptions so it
+        // Self-learning: add the trigger word to exceptions so it
         // won't be auto-converted again (Caramba-style: undo = exception).
-        // Stores BOTH forms so it works bidirectionally.
-        if autoLearnExceptions, let converted = Translit.convert(info.triggerWord), converted.converted != info.triggerWord {
-            addLearnedPair(formA: info.triggerWord, formB: converted.converted, isException: true)
+        if autoLearnExceptions {
+            learnException(info.triggerWord)
         }
 
         guard LayoutSwitch.select(toRussian: info.undoToRussian) else {
@@ -1211,11 +1163,6 @@ final class Switcher: NSObject, NSWindowDelegate {
             // Self-learning: if this selection conversion reverses any recent
             // auto-convert (user selected the auto-converted text and double-Shifts
             // it back), add the trigger word to exceptions — same as undoAutoConvert.
-            // Uses recentAutoConvertedWords which survives real keystrokes.
-            // MUST run before learnCustomDictionary — if this is an undo of an
-            // auto-convert, the word goes to exceptions (don't convert), NOT to
-            // the dictionary (force-convert).
-            var wasExceptionUndo = false
             if self.autoLearnExceptions, !self.recentAutoConvertedWords.isEmpty {
                 let selText = text.trimmingCharacters(in: .whitespaces)
                 let convText = result.converted.trimmingCharacters(in: .whitespaces)
@@ -1229,15 +1176,8 @@ final class Switcher: NSObject, NSWindowDelegate {
                     return matched
                 }
                 for word in learned {
-                    self.addLearnedPair(formA: word.original, formB: word.converted, isException: true)
-                    wasExceptionUndo = true
+                    self.learnException(word.original)
                 }
-            }
-
-            // Only learn dictionary from genuine manual conversions,
-            // NOT from undoing an auto-convert (that word goes to exceptions).
-            if !wasExceptionUndo {
-                self.learnCustomDictionary(text)
             }
 
             self.lastWasSelectionConvert = true
@@ -1285,7 +1225,6 @@ final class Switcher: NSObject, NSWindowDelegate {
             return
         }
         log("convert: «\(redact(chunk))» → «\(redact(result.converted))»")
-        learnCustomDictionary(chunk)
         replaceByDeleting(result.converted,
                           deleteCount: chunk.count,
                           toRussian: result.direction == .toCyrillic)

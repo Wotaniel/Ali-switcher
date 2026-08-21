@@ -18,6 +18,69 @@ enum AutoSwitcher {
     /// Minimum word length to check (shorter → too many false positives).
     static let minWordLength = 2
 
+    // MARK: - Built-in common word lists
+    //
+    // These are high-frequency short words in each language that
+    // NSSpellChecker sometimes doesn't recognize (especially Russian
+    // colloquial forms, abbreviations, or words missing from the system
+    // dictionary). Without this list, false-positive auto-conversions happen.
+    //
+    // Direction is implicit: Latin words → never convert to Russian;
+    // Cyrillic words → never convert to English.
+    // Built-in lists are ALWAYS checked (can't be removed by user).
+
+    /// Common English short words that should NEVER be auto-converted.
+    /// Includes single-char words ("I", "a") that replaced englishSingleCharWords.
+    static let builtinEnWords: Set<String> = [
+        // Single-char
+        "I", "a", "i",
+        // 2-char
+        "am", "an", "as", "at", "be", "by", "do", "go", "he", "if", "in",
+        "is", "it", "me", "my", "no", "of", "on", "or", "so", "to",
+        "up", "us", "we",
+        // 3-char
+        "and", "are", "but", "can", "did", "for", "get", "got", "had",
+        "has", "her", "him", "his", "how", "its", "let", "may", "new",
+        "not", "now", "old", "one", "our", "out", "say", "see", "she",
+        "the", "too", "two", "use", "was", "way", "who", "why", "yes",
+        "yet", "you",
+        // 4-char (common)
+        "been", "came", "does", "each", "find", "from", "have", "here",
+        "into", "just", "like", "made", "many", "more", "much", "must",
+        "name", "only", "over", "some", "such", "than", "that", "them",
+        "then", "there", "these", "they", "this", "upon", "want", "well",
+        "were", "what", "when", "will", "with", "your",
+        // Common abbreviations
+        "ok", "ex", "ie", "eg", "vs", "etc", "jan", "feb", "mar", "apr",
+        "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+    ]
+
+    /// Common Russian short words that should NEVER be auto-converted.
+    /// Includes words that NSSpellChecker sometimes rejects (colloquial,
+    /// short forms, particles).
+    static let builtinRuWords: Set<String> = [
+        // Single-char
+        "а", "в", "и", "к", "о", "с", "у", "я",
+        // 2-char
+        "би", "бы", "вам", "вас", "вы", "да", "за", "ли", "на", "не", "ни", "но", "от", "по",
+        "со", "то", "ту", "ты", "же", "бы",
+        // 3-char
+        "без", "для", "ещё", "ила", "или", "имя", "как", "мне",
+        "моя", "наш", "него", "ней", "нет", "них", "она", "они", "оно",
+        "под", "при", "про", "так", "теб", "там",
+        "тво", "тем", "теё", "том", "тот", "тут", "хот", "что", "это", "эту",
+        "эти", "их",
+        // 4-char (common)
+        "быть", "ведь", "весь", "вот", "всё", "всех",
+        "где", "если", "есть", "еще", "зачем", "значит", "или",
+        "когда", "кроме", "кто", "лишь", "между", "меня", "могу",
+        "может", "моё", "мой", "над", "нам", "неё", "него", "ней",
+        "нельзя", "нет", "ним", "них", "обед", "одно", "около",
+        "она", "они", "оно",
+        // Common colloquial / short forms that NSSpellChecker misses
+        "юае", "юаё", "же", "ль", "теё", "чу",
+    ]
+
     /// Characters that mark word boundaries (trigger a check).
     /// IMPORTANT: only "universal" punctuation — characters that are NOT
     /// letters in ANY layout. For example, ";" is "ж" in the Russian layout,
@@ -78,19 +141,13 @@ enum AutoSwitcher {
         word.contains("_")
     }
 
-    /// Is this word mixed-case? (iPhone, macOS, JavaScript — but NOT "Hello")
-    /// Only INTERNAL caps count: an uppercase letter AFTER the first position.
-    /// "Hello" (sentence case — first letter capital, rest lowercase) is normal
-    /// and should still be converted. "iPhone" (cap after first) → skip.
-    static func isMixedCase(_ word: String) -> Bool {
-        let letters = word.filter { $0.isLetter }
-        guard letters.count > 1 else { return false }
-        let letterArray = Array(letters)
-        // All-uppercase words (HELLO, JSON) are not mixed-case — they're
-        // conventionally uppercased and should still be converted if needed.
-        let hasLower = letterArray.contains { $0.isLowercase }
-        guard hasLower else { return false }
-        return letterArray.dropFirst().contains { $0.isUppercase }
+    /// Is this word a built-in common word that should NEVER be converted?
+    /// Checked BEFORE learned words and spell-checker — builtins always win.
+    /// In retroactive mode, builtins are SKIPPED — if the user was already
+    /// typing in the wrong layout, even common words should be converted.
+    static func isBuiltinWord(_ word: String) -> Bool {
+        if isWordLatin(word) { return builtinEnWords.contains(word) }
+        return builtinRuWords.contains(word)
     }
 
     /// Regex for domain names (adguard.com, example.org, sub.domain.io).
@@ -113,19 +170,13 @@ enum AutoSwitcher {
         return domainRegex.firstMatch(in: text, options: [], range: range) != nil
     }
 
-    /// A learned word pair: stores both forms so it works bidirectionally.
-    /// - Exception: do NOT auto-convert this pair (learned from undo)
-    /// - Dictionary: ALWAYS auto-convert this pair (learned from manual convert)
-    struct LearnedWord {
-        let formA: String       // e.g. "мд"
-        let formB: String       // e.g. "vl"
-        let isException: Bool   // true = block, false = force
-    }
-
-    /// Unified list of learned word pairs.
-    /// Replaces the old autoExceptions + customDictionary.
-    /// Loaded/saved by Switcher from UserDefaults["learnedWords"].
-    static var learnedWords: [LearnedWord] = []
+    /// Two independent word lists: English (Latin) and Russian (Cyrillic).
+    /// Words in these lists are NEVER auto-converted.
+    /// Direction is implicit in the word's script: Latin → enWords,
+    /// Cyrillic → ruWords.
+    /// Loaded/saved from UserDefaults as two separate arrays.
+    static var enWords: Set<String> = []
+    static var ruWords: Set<String> = []
 
     /// Parses a typing buffer into (word, gap) segments.
     /// Example: "f e ghbdtn" → [("f", " "), ("e", " "), ("ghbdtn", "")]
@@ -190,25 +241,32 @@ enum AutoSwitcher {
         let segments = parseBufferSegments(buffer)
 
         // The last segment's word is what we check first.
-        // Special case: 1-char words are allowed if they convert to a letter
-        // of the other script (universal — not limited to prepositions).
+        // Single-char words are allowed as triggers ONLY in the toCyrillic
+        // direction (Latin → Russian). This lets "f" → "а" work (the user
+        // typed Latin meaning Russian). In the reverse direction (Russian →
+        // Latin), single chars like "а", "в", "и" are valid Russian words and
+        // must NOT be auto-converted to English ("f", "d", "b").
+        // NSSpellChecker considers all single letters "valid" in both
+        // languages, so direction is the only way to distinguish intent.
+        // Multi-char words always go through the full spell-checker.
         guard let lastSegment = segments.last,
               lastSegment.word.count >= minWordLength
-                || isSingleCharConvertible(lastSegment.word) else {
+                || (isSingleCharConvertible(lastSegment.word)
+                    && Translit.convert(lastSegment.word)?.direction == .toCyrillic) else {
             return nil
         }
 
         // Skip words in the exceptions list (learned from previous undos).
-        // Only blocks the original trigger direction (formA).
-        if let learned = lookupLearned(lastSegment.word),
-           learned.isException, lastSegment.word == learned.formA {
+        if isLearnedException(lastSegment.word) {
             return nil
         }
 
-        // For single-char prepositions, use minLength: 1 so shouldConvert
-        // doesn't reject them. Normal words use the default minWordLength.
+        // For single-char trigger words (Latin → Cyrillic direction only,
+        // checked above), use minLength: 1 so shouldConvert doesn't reject
+        // them at step 1. The spell-checker bypass in step 4b handles the
+        // direction check (toCyrillic allowed, toLatin blocked).
         let minLen = lastSegment.word.count == 1 ? 1 : minWordLength
-        guard let result = shouldConvert(lastSegment.word, minLength: minLen) else { return nil }
+        guard let result = shouldConvert(lastSegment.word, minLength: minLen, isRetroactive: false) else { return nil }
 
         // Retroactive: walk backwards from the last word and convert all previous
         // words that are also in the wrong layout (same direction).
@@ -219,7 +277,7 @@ enum AutoSwitcher {
         while wordIndex >= 0 {
             let prevSeg = segments[wordIndex]
             let gap = segments[wordIndex].gap
-            if let prevResult = shouldConvert(prevSeg.word, minLength: 1),
+            if let prevResult = shouldConvert(prevSeg.word, minLength: 1, isRetroactive: true),
                prevResult.direction == result.direction {
                 convertedText = prevResult.converted + gap + convertedText
                 deleteCount += prevSeg.word.count + gap.count
@@ -247,18 +305,39 @@ enum AutoSwitcher {
         )
     }
 
-    /// Checks if a word matches any learned pair.
-    /// Prioritizes formA matches (directional: the word the user typed).
-    /// This ensures exceptions block only the original direction.
-    /// e.g. exception «мд⇄vl» blocks «мд» (formA) but lets «vl» (formB)
-    /// fall through to a dictionary entry or spell-checker.
-    static func lookupLearned(_ word: String) -> LearnedWord? {
-        // First: exact formA match (the word the user originally typed).
-        if let match = learnedWords.first(where: { $0.formA == word }) {
-            return match
+    // MARK: - Learned words (two independent lists)
+
+    /// Is the word Latin (English layout)? Direction is implicit:
+    /// Latin word → toCyrillic; Cyrillic word → toLatin.
+    static func isWordLatin(_ word: String) -> Bool {
+        guard let first = word.first, first.isLetter else { return false }
+        return !Translit.isCyrillic(first)
+    }
+
+    /// Is this word in the user's exception list (should NOT be auto-converted)?
+    /// Checks the correct list based on the word's script.
+    static func isLearnedException(_ word: String) -> Bool {
+        if isWordLatin(word) { return enWords.contains(word) }
+        return ruWords.contains(word)
+    }
+
+    /// Add a word to the appropriate exception list (auto-learn on undo).
+    static func addException(_ word: String) {
+        if isWordLatin(word) {
+            enWords.insert(word)
+        } else {
+            ruWords.insert(word)
         }
-        // Second: formB match (reverse direction).
-        return learnedWords.first(where: { $0.formB == word })
+    }
+
+    // Removed: enDictionary, ruDictionary, rebuildLearnedSets, isLearnedDictionary.
+
+    /// Is this word in the built-in common words list (NEVER convert)?
+    /// In retroactive mode, builtins are skipped — the user was already
+    /// typing in the wrong layout, so even common words should convert.
+    static func isBuiltinWordRetrospective(_ word: String, retroactive: Bool) -> Bool {
+        guard !retroactive else { return false }
+        return isBuiltinWord(word)
     }
 
     /// Determines whether a word was typed in the wrong layout.
@@ -280,7 +359,7 @@ enum AutoSwitcher {
     ///    If minLength == 1 (retroactive): skip this check — NSSpellChecker
     ///    considers all single letters "valid" (e.g. "f" is not misspelled),
     ///    so we rely on the fact that the main word already proved wrong layout.
-    static func shouldConvert(_ word: String, minLength: Int = minWordLength) -> (converted: String, direction: SwitchDirection)? {
+    static func shouldConvert(_ word: String, minLength: Int = minWordLength, isRetroactive: Bool = false) -> (converted: String, direction: SwitchDirection)? {
         // 1) Too short
         guard word.count >= minLength else { return nil }
 
@@ -310,30 +389,32 @@ enum AutoSwitcher {
         guard let result = Translit.convert(word) else { return nil }
         guard result.converted != word else { return nil }
 
-        // 4a) Learned words (unified list):
-        // - Exception (formA match) → block: user undid this auto-convert before.
-        //   Only blocks the ORIGINAL trigger word (formA). The reverse (formB)
-        //   is NOT blocked — it falls through to spell-checker or dictionary.
-        //   e.g. undoing «мд»→«vl» blocks «мд» from auto-converting,
-        //   but «vl»→«мд» still works (may match a dictionary entry or pass spell-check).
-        // - Dictionary (either form) → force convert (skip spell-checker).
-        if let learned = lookupLearned(word) {
-            if learned.isException && word == learned.formA {
-                return nil  // user undid this conversion before — don't repeat
-            } else if !learned.isException {
-                return result  // user manually converted this before — force it
-            }
-            // Exception with formB match → fall through to spell-checker
+        // 4a) Built-in common words — NEVER convert (unless retroactive).
+        // These are high-frequency words that NSSpellChecker may miss.
+        // In retroactive mode, skip this check — the user was already typing
+        // in the wrong layout, so even common words should be converted.
+        if isBuiltinWordRetrospective(word, retroactive: isRetroactive) {
+            return nil
         }
 
-        // 4b) Single-char words in retroactive mode (minLength == 1):
+        // 4b) User exception list — word the user undid before.
+        // Two independent lists: direction is implicit in the word's script.
+        if isLearnedException(word) {
+            return nil  // user undid this conversion before — don't repeat
+        }
+
+        // 4c) Single-char words in retroactive mode (minLength == 1):
         // If we already know the user was typing in the wrong layout
         // (retroactive walk triggered by a multi-char word), any single char
-        // that converts to a letter of the other script is also wrong.
-        // Universal — no hardcoded word list. NSSpellChecker rejects single
-        // letters as "invalid", so we bypass it here.
+        // that converts to a letter of the other script is also wrong —
+        // BUT ONLY in the toCyrillic direction (Latin → Russian).
+        // In the toLatin direction (Russian → Latin), single chars like «а»,
+        // «в», «и» are valid Russian words and must NOT be converted.
         if word.count == 1, minLength <= 1 {
-            return result
+            if result.direction == .toCyrillic {
+                return result
+            }
+            return nil  // Don't convert single Russian letters to Latin
         }
 
         // 5–6) Spell-check both directions

@@ -8,7 +8,7 @@ AliSwitcher — macOS layout switcher (RU↔EN only). Mini-analog of Punto/Caram
 
 ```bash
 ./build.sh                                    # Build → build/AliSwitcher.app
-build/AliSwitcher.app/Contents/MacOS/AliSwitcher --test   # 66 self-tests
+build/AliSwitcher.app/Contents/MacOS/AliSwitcher --test   # 160 self-tests
 ditto build/AliSwitcher.app /Applications/AliSwitcher.app # Deploy
 killall AliSwitcher; open /Applications/AliSwitcher.app   # Restart
 ./make-dmg.sh                                 # Build DMG installer → dist/AliSwitcher.dmg
@@ -42,8 +42,8 @@ killall AliSwitcher; open /Applications/AliSwitcher.app   # Restart
 
 | File | Responsibility |
 |---|---|
-| `main.swift` | App, CGEventTap, performSwitch, tryAutoConvert, undoAutoConvert, Timing enum, menu, exceptions editor |
-| `AutoSwitcher.swift` | shouldConvert, isNonConvertible, matchesDomainPattern, isMixedCase, boundaries |
+| `main.swift` | App, CGEventTap, performSwitch, tryAutoConvert, undoAutoConvert, Timing enum, menu, word list editors |
+| `AutoSwitcher.swift` | shouldConvert, isNonConvertible, matchesDomainPattern, builtin words (EN+RU), two word lists (enWords/ruWords), boundaries |
 | `KeyEvents.swift` | Synthetic key posting: backspace, type, copySelection, paste, undo |
 | `KeyTracker.swift` | UCKeyTranslate, Action enum (.text/.deleteBackward/.reset/.ignore) |
 | `Translit.swift` | ЙЦУКЕН↔QWERTY map, convert, isCyrillic, enOnSameKey |
@@ -51,7 +51,7 @@ killall AliSwitcher; open /Applications/AliSwitcher.app   # Restart
 | `LayoutSwitch.swift` | TISSelectInputSource, currentIsRussian, toggle |
 | `Accessibility.swift` | AXUIElement, focusedElement, secureField, selectedText, selectedRange |
 | `Clipboard.swift` | ClipboardSnapshot, copy, restore |
-| `SelfTests.swift` | `--test` flag, 66 tests |
+| `SelfTests.swift` | `--test` flag, 160 tests |
 
 ## Critical patterns
 
@@ -74,56 +74,90 @@ killall AliSwitcher; open /Applications/AliSwitcher.app   # Restart
 5. Buffer not empty → `convertTypedText` (backspace + retype)
 6. Fallback → `convertSelectionViaClipboard`
 
+### Two independent word lists
+
+Direction is **implicit in the word's script** (alphabet). Two simple `Set<String>` — no struct, no pairs, no flags, no dictionary concept.
+
+**2 word lists** (directly persisted to UserDefaults):
+
+| Set | Script | Purpose |
+|---|---|---|
+| `enWords` | Latin | Latin words user undid — block auto-convert (Latin→Russian) |
+| `ruWords` | Cyrillic | Cyrillic words user undid — block auto-convert (Russian→Latin) |
+
+**`addException(_ word:)`** routes by script: Latin → `enWords`, Cyrillic → `ruWords`.
+
+**Built-in word lists** (in code, ~100+ words each):
+- `builtinEnWords` — common English words (the, is, a, I, he, it, was, for, …)
+- `builtinRuWords` — common Russian words (что, она, юае, а, в, и, …)
+- Checked via `isBuiltinWord(_:)` — dispatches by script
+- In retroactive mode (user typed wrong layout), builtins are **skipped** — even common words should be converted
+
+**`shouldConvert` priority order** (each step can return early):
+1. Length/letters/uppercase/digits/underscores/URLs — structural filters
+2. `Translit.convert` must succeed
+3. **4a) Builtin words** → return nil (skip, unless retroactive)
+4. **4b) Word list exception** → return nil (user undid this before)
+5. **4c) Single-char retroactive** → only `.toCyrillic` (Latin→Russian), NOT `.toLatin`
+6. **5–6) Spell-checker** (NSSpellChecker): orig must be misspelled + converted must be valid
+
 ### Auto-learn exceptions
-- `autoLearnExceptions` (default ON): undoing auto-convert adds word pair to learnedWords as exception
+- `autoLearnExceptions` (default ON): undoing auto-convert adds word to `enWords` or `ruWords` via `learnException(_:)`
 - Works for both `undoAutoConvert` (double-Shift undo) and `convertSelectionViaClipboard` (selection undo)
-- Learned words persisted in `UserDefaults["learnedWords"]` as `[String]` (`"formA\tformB\texc"` or `"formA\tformB\tdict"`)
-- Menu: "Auto-Learn Exceptions" toggle + "Words…" editor (format: `! word1 word2` = exception, `word1 word2` = dictionary)
+- Word lists persisted in `UserDefaults["enWords"]` and `UserDefaults["ruWords"]` as `[String]` (one word per element)
+- Menu: "Auto-Learn Exceptions" toggle + "English Words…" + "Russian Words…" editors
+- Two separate windows: English (Latin words, one per line) and Russian (Cyrillic words, one per line)
+- `saveWordsFromEditor` parses one word per line into `Set<String>`, replaces entire list
+- No dictionary concept — manual convert does NOT learn anything
 
 ## What NOT to do
 
 - Don't add text polishing (е→ё, em-dashes, smart quotes) — this is a **layout** switcher
 - Don't add app exclusion lists — edge-case detection handles code context instead
-- Don't touch `isMixedCase` to block conversions — spell-checker is the gatekeeper
 - Don't forget to rebuild DMG after code changes
 - Don't use `defer { busy = false }` in async methods
 
 ## Business logic rules (CRITICAL — think before coding!)
 
-**Unified learned words list — exceptions and dictionary in ONE list:**
+**Two independent word lists — direction is implicit in the word's script:**
 
 | Field | Type | Description |
 |---|---|---|
-| `AutoSwitcher.learnedWords` | `[LearnedWord]` | Unified list. Each entry has `formA`, `formB`, `isException` |
-| `LearnedWord.isException` | `Bool` | `true` = exception (don't auto-convert), `false` = dictionary (force-convert) |
-| `AutoSwitcher.lookupLearned(_:)` | `LearnedWord?` | Directional: prioritizes `formA` match over `formB` (exceptions only block original direction) |
-| `learnedWords` (UserDefaults) | `[String]` | Stored as `"formA\tformB\texc"` or `"formA\tformB\tdict"` |
+| `AutoSwitcher.enWords` | `Set<String>` | Latin words user undid — blocks auto-convert (Latin→Russian) |
+| `AutoSwitcher.ruWords` | `Set<String>` | Cyrillic words user undid — blocks auto-convert (Russian→Latin) |
+| `builtinEnWords` / `builtinRuWords` | `Set<String>` | ~100+ common words per language, hardcoded in AutoSwitcher.swift |
+| `enWords` (UserDefaults) | `[String]` | One word per element, loaded/saved directly |
+| `ruWords` (UserDefaults) | `[String]` | One word per element, loaded/saved directly |
 
-**Exception** = user undoes an auto-convert → word pair stored with `isException: true`
-→ `shouldConvert` returns nil for that word **only when `word == formA`** (directional).
-→ `formB` (reverse direction) is NOT blocked — `lookupLearned` prioritizes formA matches.
+**Direction is determined by script (alphabet), NOT by a field:**
+- Latin word in `enWords` → blocks auto-convert in **Latin→Russian** direction only
+- Cyrillic word in `ruWords` → blocks auto-convert in **Russian→Latin** direction only
+- Lists are fully independent — no pairs, no reverse blocking
 
-**Dictionary** = user manually converts text (genuine, not undo) → stored with `isException: false`
-→ `shouldConvert` skips spell-checker for that word (works both directions via formA or formB match).
+**Exception** = user undoes an auto-convert → word added to `enWords` or `ruWords` via `learnException(_:)`
+→ `shouldConvert` returns nil — the word is in the exception list for its script.
+→ Reverse direction is NOT blocked (different script → different list).
 
-**NEVER call `learnCustomDictionary` when the conversion is an undo of an auto-convert.**
-If the user auto-converts «мд»→«vl», then selects «vl» and double-Shifts it back — that's
-an **exception** (don't convert «мд» next time), NOT a dictionary word.
-The `wasExceptionUndo` flag in `convertSelectionViaClipboard` guards this.
+**No dictionary concept.** Manual convert (double-Shift on selection) does NOT learn anything.
+There is no force-convert mechanism. Only undo (exception) learns.
 
-**Deduplication — no entry multiplication:**
-- `addLearnedPair` ALWAYS removes matching entries before adding (dedup by any form match)
-- Toggle cycle (undo → manual convert → undo) replaces entries, never multiplies
-- `loadLearnedWords` deduplicates on load: same type in both directions = keep one
-- Different types for same pair (exc + dict in different directions) = keep BOTH (serves different directions via formA priority)
-- Log shows "replaced N old entries" when dedup occurs
+**Built-in words** = safety net for common words NSSpellChecker may miss.
+→ Checked BEFORE learned words and spell-checker in `shouldConvert`.
+→ Skipped in retroactive mode (user typed wrong layout → even common words need conversion).
+→ Examples: English (the, is, a, I, he), Russian (что, она, юае, а, в).
+
+**Deduplication — automatic via Set:**
+- `enWords` and `ruWords` are `Set<String>` — duplicates impossible by construction
+- `addException` simply inserts; Set handles dedup
+- `saveWordsFromEditor` parses one word per line, creates new Set — old list fully replaced
 
 **Senior developer checklist before any change:**
-1. What is the business meaning of this data path? (undo vs genuine conversion)
-2. What happens if this code runs in EVERY possible scenario? (exception undo, manual convert, toggle, fallback)
-3. Are there two opposing concepts that could get crossed? (exceptions vs dictionary)
-4. What state survives across keystrokes vs what's cleared? (recentAutoConvertedWords vs lastAutoConvertInfo)
-5. Does every panel/window close path restore `activationPolicy` to `.accessory`?
+1. Which script (Latin/Cyrillic) does this word belong to? → `enWords` or `ruWords`?
+2. Does this undo path call `learnException`? (it should)
+3. What state survives across keystrokes vs what's cleared? (`recentAutoConvertedWords` vs `lastAutoConvertInfo`)
+4. Does every panel/window close path restore `activationPolicy` to `.accessory`?
+5. Is this a builtin word? → builtins block conversion (except in retroactive mode)
+6. Manual convert should NOT learn anything — only undo learns
 
 **The developer of this codebase is a senior engineer who prioritizes:**
 - Business logic correctness over clever shortcuts

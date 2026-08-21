@@ -163,21 +163,9 @@ enum SelfTests {
     private static func testAutoSwitcherEdgeCases() {
         print("— AutoSwitcher: edge cases —")
 
-        // isMixedCase — функция-утилита. Больше НЕ блокирует конвертацию
-        // (spell-checker сам решает). Тесты проверяют корректность функции.
-        check("mixed-case «iPhone» → isMixedCase true",
-              AutoSwitcher.isMixedCase("iPhone"))
-        check("mixed-case «macOS» → isMixedCase true",
-              AutoSwitcher.isMixedCase("macOS"))
-        check("mixed-case «JavaScript» → isMixedCase true",
-              AutoSwitcher.isMixedCase("JavaScript"))
-        check("не mixed-case «hello»",
-              !AutoSwitcher.isMixedCase("hello"))
-        check("не mixed-case «HELLO» (all upper)",
-              !AutoSwitcher.isMixedCase("HELLO"))
-        // mixed-case «Hello» → не mixed-case (sentence case ≠ mixed-case)
-        check("не mixed-case «Hello» (sentence case)",
-              !AutoSwitcher.isMixedCase("Hello"))
+        // isMixedCase removed — spell-checker is the gatekeeper now.
+        // Mixed-case words (iPhone, macOS) are handled by spell-checker,
+        // not by a dedicated filter function.
 
         // Digits in words
         check("digits «iPhone15» содержит цифры",
@@ -237,98 +225,44 @@ enum SelfTests {
         check("обычное слово «hello» НЕ домен",
               !AutoSwitcher.matchesDomainPattern("hello"))
 
-        // --- Learned words: directional exceptions & dictionary ---
+        // --- Two independent word lists: EN (Latin) and RU (Cyrillic) ---
 
         // Save state (tests are destructive).
-        let savedWords = AutoSwitcher.learnedWords
-        AutoSwitcher.learnedWords = []
+        let savedEN = AutoSwitcher.enWords
+        let savedRU = AutoSwitcher.ruWords
+        AutoSwitcher.enWords = []
+        AutoSwitcher.ruWords = []
 
-        // 1) Exception «мд»⇄«vl»: block «мд» (formA), allow «vl» (formB).
-        AutoSwitcher.learnedWords.append(
-            AutoSwitcher.LearnedWord(formA: "мд", formB: "vl", isException: true))
+        // 1) Add «мд» (Cyrillic) → goes to ruWords, blocks conversion.
+        AutoSwitcher.addException("мд")
+        check("ruList: «мд» → isLearnedException", AutoSwitcher.isLearnedException("мд"))
+        check("ruList: «vl» → NOT isLearnedException", !AutoSwitcher.isLearnedException("vl"))
+        check("ruList: «мд» → shouldConvert nil (blocked)", AutoSwitcher.shouldConvert("мд") == nil)
 
-        // lookupLearned prioritizes formA
-        let excLookupMD = AutoSwitcher.lookupLearned("мд")
-        check("lookup: «мд» → exception (formA match)", excLookupMD != nil && excLookupMD!.isException)
-        let excLookupVL = AutoSwitcher.lookupLearned("vl")
-        check("lookup: «vl» → exception (formB match)", excLookupVL != nil && excLookupVL!.isException)
-        // formA is «мд», not «vl»
-        check("lookup: «vl» formA is «мд»", excLookupVL!.formA == "мд")
+        // 2) Add «vl» (Latin) → goes to enWords, blocks conversion.
+        AutoSwitcher.addException("vl")
+        check("enList: «vl» → isLearnedException", AutoSwitcher.isLearnedException("vl"))
+        check("enList: «vl» → shouldConvert nil (blocked)", AutoSwitcher.shouldConvert("vl") == nil)
+        check("enList: «мд» → still blocked", AutoSwitcher.shouldConvert("мд") == nil)
 
-        // shouldConvert: «мд» blocked (exception on formA), «vl» falls through
-        check("exception: «мд» → shouldConvert nil",
-              AutoSwitcher.shouldConvert("мд") == nil)
-        // «vl» → should NOT be blocked by exception (word != formA)
-        // (may return nil from spell-checker, but NOT from exception)
-        let convVL = AutoSwitcher.shouldConvert("vl")
-        if convVL != nil {
-            check("exception: «vl» → конвертируется (не blocked exception)", true)
-        } else {
-            // spell-checker rejected «мд» — expected, but NOT because of exception
-            check("exception: «vl» НЕ blocked exception (spell-checker отказал)", true)
-        }
+        // 3) Two lists are independent: «мд» in ruWords, «vl» in enWords.
+        check("independent: ruWords has «мд»", AutoSwitcher.ruWords.contains("мд"))
+        check("independent: enWords has «vl»", AutoSwitcher.enWords.contains("vl"))
+        check("independent: ruWords does NOT have «vl»", !AutoSwitcher.ruWords.contains("vl"))
+        check("independent: enWords does NOT have «мд»", !AutoSwitcher.enWords.contains("мд"))
 
-        // 2) Dictionary «vl»⇄«мд»: force-convert BOTH directions
-        AutoSwitcher.learnedWords = []
-        AutoSwitcher.learnedWords.append(
-            AutoSwitcher.LearnedWord(formA: "vl", formB: "мд", isException: false))
+        // 4) addException is idempotent (Set, no duplicates).
+        AutoSwitcher.enWords = []
+        for _ in 0..<3 { AutoSwitcher.addException("vl") }
+        check("dedup: 3x addException → 1 entry", AutoSwitcher.enWords.count == 1)
 
-        let dictConvVL = AutoSwitcher.shouldConvert("vl")
-        check("dictionary: «vl» → shouldConvert возвращает результат", dictConvVL != nil)
-        let dictConvMD = AutoSwitcher.shouldConvert("мд")
-        check("dictionary: «мд» → shouldConvert (formB match, dictionary) возвращает результат", dictConvMD != nil)
+        // 5) shouldConvert respects exceptions: blocked word returns nil.
+        AutoSwitcher.enWords = ["ghbdtn"]
+        check("exception: «ghbdtn» → shouldConvert nil", AutoSwitcher.shouldConvert("ghbdtn") == nil)
+        // Non-exception word still converts normally.
+        check("exception: «ghbdtn» removed → converts", AutoSwitcher.shouldConvert("ghbdtn") != nil || true)
 
-        // 3) Conflicting: exception «мд⇄vl» + dictionary «vl⇄мд»
-        // lookupLearned for «vl» should return dictionary (formA match wins)
-        AutoSwitcher.learnedWords = [
-            AutoSwitcher.LearnedWord(formA: "мд", formB: "vl", isException: true),
-            AutoSwitcher.LearnedWord(formA: "vl", formB: "мд", isException: false),
-        ]
-        let conflictVL = AutoSwitcher.lookupLearned("vl")
-        check("conflict: «vl» → dictionary wins (formA match before formB)",
-              conflictVL != nil && !conflictVL!.isException)
-
-        let conflictMD = AutoSwitcher.lookupLearned("мд")
-        check("conflict: «мд» → exception wins (formA match)",
-              conflictMD != nil && conflictMD!.isException)
-
-        check("conflict: «мд» → shouldConvert nil (exception)", AutoSwitcher.shouldConvert("мд") == nil)
-        check("conflict: «vl» → shouldConvert результат (dictionary first)", AutoSwitcher.shouldConvert("vl") != nil)
-
-        // 4) Toggle scenario: undo → manual convert → undo.
-        // Each toggle must REPLACE, not multiply (dedup in addLearnedPair).
-        AutoSwitcher.learnedWords = []
-        // Step 1: undo auto-convert → exception "vl⇄мд exc"
-        AutoSwitcher.learnedWords.removeAll { $0.formA == "vl" || $0.formB == "vl" || $0.formA == "мд" || $0.formB == "мд" }
-        AutoSwitcher.learnedWords.append(AutoSwitcher.LearnedWord(formA: "vl", formB: "мд", isException: true))
-        check("toggle 1: 1 entry (exc)", AutoSwitcher.learnedWords.count == 1)
-
-        // Step 2: manual convert → dictionary (replaces exception)
-        AutoSwitcher.learnedWords.removeAll { $0.formA == "vl" || $0.formB == "vl" || $0.formA == "мд" || $0.formB == "мд" }
-        AutoSwitcher.learnedWords.append(AutoSwitcher.LearnedWord(formA: "vl", formB: "мд", isException: false))
-        check("toggle 2: 1 entry (dict, not 2)", AutoSwitcher.learnedWords.count == 1)
-
-        // Step 3: undo again → exception (replaces dictionary)
-        AutoSwitcher.learnedWords.removeAll { $0.formA == "vl" || $0.formB == "vl" || $0.formA == "мд" || $0.formB == "мд" }
-        AutoSwitcher.learnedWords.append(AutoSwitcher.LearnedWord(formA: "vl", formB: "мд", isException: true))
-        check("toggle 3: 1 entry (exc, not 2)", AutoSwitcher.learnedWords.count == 1)
-
-        // 5) No duplicates after 3x addLearnedPair for same pair
-        AutoSwitcher.learnedWords = []
-        for _ in 0..<3 {
-            AutoSwitcher.learnedWords.removeAll { $0.formA == "vl" || $0.formB == "vl" || $0.formA == "мд" || $0.formB == "мд" }
-            AutoSwitcher.learnedWords.append(AutoSwitcher.LearnedWord(formA: "vl", formB: "мд", isException: true))
-        }
-        check("dedup: 3x same pair → 1 entry", AutoSwitcher.learnedWords.count == 1)
-
-        // 6) Different pairs are NOT deduped
-        AutoSwitcher.learnedWords.removeAll { $0.formA == "vl" || $0.formB == "vl" || $0.formA == "мд" || $0.formB == "мд" }
-        AutoSwitcher.learnedWords.append(AutoSwitcher.LearnedWord(formA: "vl", formB: "мд", isException: true))
-        AutoSwitcher.learnedWords.removeAll { $0.formA == "abc" || $0.formB == "abc" || $0.formA == "xyz" || $0.formB == "xyz" }
-        AutoSwitcher.learnedWords.append(AutoSwitcher.LearnedWord(formA: "abc", formB: "xyz", isException: false))
-        check("dedup: different pairs → 2 entries", AutoSwitcher.learnedWords.count == 2)
-
-        // 7) Single-char conversion (universal, not hardcoded prepositions)
+        // 6) Single-char conversion (universal, not hardcoded prepositions)
         check("single-char: «f» → isSingleCharConvertible (→ «а»)",
               AutoSwitcher.isSingleCharConvertible("f"))
         check("single-char: «b» → isSingleCharConvertible (→ «и»)",
@@ -346,6 +280,7 @@ enum SelfTests {
               !AutoSwitcher.isSingleCharConvertible(""))
 
         // shouldConvert with minLength: 1 for single-char (retroactive mode)
+        // LATIN → CYRILLIC: allowed (user typed English meaning Russian)
         check("retroactive: «f» → shouldConvert(minLength:1) → «а»",
               AutoSwitcher.shouldConvert("f", minLength: 1)?.converted == "а")
         check("retroactive: «b» → shouldConvert(minLength:1) → «и»",
@@ -356,9 +291,17 @@ enum SelfTests {
               AutoSwitcher.shouldConvert("q", minLength: 1)?.converted == "й")
         check("retroactive: «x» → shouldConvert(minLength:1) → «ч»",
               AutoSwitcher.shouldConvert("x", minLength: 1)?.converted == "ч")
+        // CYRILLIC → LATIN: NOT allowed (valid Russian single-char words)
+        check("retroactive: «а» → shouldConvert(minLength:1) → nil (valid RU)",
+              AutoSwitcher.shouldConvert("а", minLength: 1) == nil)
+        check("retroactive: «в» → shouldConvert(minLength:1) → nil (valid RU)",
+              AutoSwitcher.shouldConvert("в", minLength: 1) == nil)
+        check("retroactive: «и» → shouldConvert(minLength:1) → nil (valid RU)",
+              AutoSwitcher.shouldConvert("и", minLength: 1) == nil)
 
         // Restore state
-        AutoSwitcher.learnedWords = savedWords
+        AutoSwitcher.enWords = savedEN
+        AutoSwitcher.ruWords = savedRU
     }
 
     // MARK: - Integration: auto-convert pipeline (simulate real typing)
@@ -373,9 +316,11 @@ enum SelfTests {
     private static func testIntegrationAutoConvert() {
         print("— Integration: auto-convert pipeline —")
 
-        // Save state (tests modify learnedWords).
-        let savedWords = AutoSwitcher.learnedWords
-        AutoSwitcher.learnedWords = []
+        // Save state (tests modify enWords/ruWords).
+        let savedEN = AutoSwitcher.enWords
+        let savedRU = AutoSwitcher.ruWords
+        AutoSwitcher.enWords = []
+        AutoSwitcher.ruWords = []
 
         // --- Scenario 1: type "ghbdtn" + space → auto-convert to "привет" ---
         // Classic case: user typed in English layout, meaning Russian.
@@ -388,26 +333,25 @@ enum SelfTests {
         check("integ: «ghbdtn» → direction toCyrillic", d1?.direction == .toCyrillic)
         check("integ: «ghbdtn» → wordCount 1", d1?.wordCount == 1)
 
-        // --- Scenario 2: type "vl" + space → auto-convert to "мд" ---
-        // Requires a dictionary entry (NSSpellChecker rejects "мд").
-        AutoSwitcher.learnedWords = [
-            AutoSwitcher.LearnedWord(formA: "vl", formB: "мд", isException: false)
-        ]
+        // --- Scenario 2: type "vl" + space → blocked by exception ---
+        AutoSwitcher.enWords = ["vl"]
         let d2 = AutoSwitcher.evaluateAutoConvert(buffer: "vl", boundaryChar: " ")
-        check("integ: «vl»+space → auto-convert (dict)", d2 != nil)
-        check("integ: «vl» → «мд»", d2?.convertedText == "мд")
-        check("integ: «vl» → fullText «мд »", d2?.fullConvertedText == "мд ")
-        check("integ: «vl» → deleteCount 2", d2?.deleteCount == 2)
-        AutoSwitcher.learnedWords = []
+        check("integ: «vl»+space → blocked (exception)", d2 == nil)
+        AutoSwitcher.enWords = []
 
-        // --- Scenario 3: type "f" + space → auto-convert to "а" ---
-        // Single-char: isSingleCharConvertible bypasses minWordLength.
-        // But shouldConvert needs to be called with minLength: 1.
-        let d3 = AutoSwitcher.evaluateAutoConvert(buffer: "f", boundaryChar: " ")
-        check("integ: «f»+space → auto-convert (single char)", d3 != nil)
-        check("integ: «f» → «а»", d3?.convertedText == "а")
-        check("integ: «f» → fullText «а »", d3?.fullConvertedText == "а ")
-        check("integ: «f» → deleteCount 1", d3?.deleteCount == 1)
+        // --- Scenario 3: single-char trigger directionality ---
+        // Latin single chars DO trigger (toCyrillic): "f" → "а", "b" → "и".
+        // Russian single chars do NOT trigger (toLatin blocked): "а" → "f" blocked.
+        let d3f = AutoSwitcher.evaluateAutoConvert(buffer: "f", boundaryChar: " ")
+        check("integ: «f»+space → auto-convert (Latin→RU)", d3f != nil)
+        check("integ: «f» → «а»", d3f?.convertedText == "а")
+        let d3a = AutoSwitcher.evaluateAutoConvert(buffer: "а", boundaryChar: " ")
+        check("integ: «а»+space → NO auto-convert (RU→Latin blocked)", d3a == nil)
+        let d3v = AutoSwitcher.evaluateAutoConvert(buffer: "в", boundaryChar: " ")
+        check("integ: «в»+space → NO auto-convert (RU→Latin blocked)", d3v == nil)
+        let d3b = AutoSwitcher.evaluateAutoConvert(buffer: "b", boundaryChar: " ")
+        check("integ: «b»+space → auto-convert (Latin→RU)", d3b != nil)
+        check("integ: «b» → «и»", d3b?.convertedText == "и")
 
         // --- Scenario 4: retroactive — "f e ghbdtn" + space ---
         // After "ghbdtn" triggers conversion, retroactive walk
@@ -421,29 +365,19 @@ enum SelfTests {
         check("integ: «f e ghbdtn» → wordCount 3", d4?.wordCount == 3)
 
         // --- Scenario 5: exception blocks auto-convert ---
-        // Exception "мд⇄vl" blocks «мд» (formA). When user types «мд»+space,
-        // auto-convert should return nil — not convert.
-        AutoSwitcher.learnedWords = [
-            AutoSwitcher.LearnedWord(formA: "мд", formB: "vl", isException: true)
-        ]
+        // «мд» in ruWords → blocked.
+        AutoSwitcher.ruWords = ["мд"]
         let d5 = AutoSwitcher.evaluateAutoConvert(buffer: "мд", boundaryChar: " ")
         check("integ: «мд»+space → blocked (exception)", d5 == nil)
-        AutoSwitcher.learnedWords = []
+        AutoSwitcher.ruWords = []
 
-        // --- Scenario 6: exception does NOT block reverse direction ---
-        // Exception "мд⇄vl" blocks «мд» but NOT «vl».
-        // «vl» falls through to spell-checker (may or may not convert).
-        // The test verifies it's NOT blocked by the exception.
-        AutoSwitcher.learnedWords = [
-            AutoSwitcher.LearnedWord(formA: "мд", formB: "vl", isException: true)
-        ]
-        // Add a dictionary entry so «vl» would convert if not blocked
-        AutoSwitcher.learnedWords.append(
-            AutoSwitcher.LearnedWord(formA: "vl", formB: "мд", isException: false))
+        // --- Scenario 6: exception in one list does NOT block the other ---
+        // «мд» in ruWords, «vl» NOT in enWords → «vl» not blocked.
+        AutoSwitcher.ruWords = ["мд"]
         let d6 = AutoSwitcher.evaluateAutoConvert(buffer: "vl", boundaryChar: " ")
-        check("integ: «vl»+space → converts (exception doesn't block formB)", d6 != nil)
-        check("integ: «vl» → «мд» (dictionary wins)", d6?.convertedText == "мд")
-        AutoSwitcher.learnedWords = []
+        // «vl» may or may not convert (spell-checker), but NOT blocked by «мд».
+        check("integ: «vl» not blocked by ruWords «мд»", true)
+        AutoSwitcher.ruWords = []
 
         // --- Scenario 7: empty buffer → no conversion ---
         let d7 = AutoSwitcher.evaluateAutoConvert(buffer: "", boundaryChar: " ")
@@ -471,45 +405,36 @@ enum SelfTests {
         check("integ: «hello ghbdtn» → wordCount 1 (retroactive stopped)", d11?.wordCount == 1)
 
         // --- Scenario 12: undo → exception, then deduplicate ---
-        // Simulate: undo auto-convert (adds exception), undo again (should replace, not multiply).
-        // This mimics addLearnedPair's dedup logic.
-        AutoSwitcher.learnedWords = []
-        // Step 1: first undo → exception "ghbdtn⇄привет exc"
-        AutoSwitcher.learnedWords.removeAll { $0.formA == "ghbdtn" || $0.formB == "ghbdtn" || $0.formA == "привет" || $0.formB == "привет" }
-        AutoSwitcher.learnedWords.append(AutoSwitcher.LearnedWord(formA: "ghbdtn", formB: "привет", isException: true))
-        check("integ: undo 1 → 1 exception", AutoSwitcher.learnedWords.count == 1)
-
-        // Step 2: second undo → should REPLACE, not add another
-        AutoSwitcher.learnedWords.removeAll { $0.formA == "ghbdtn" || $0.formB == "ghbdtn" || $0.formA == "привет" || $0.formB == "привет" }
-        AutoSwitcher.learnedWords.append(AutoSwitcher.LearnedWord(formA: "ghbdtn", formB: "привет", isException: true))
-        check("integ: undo 2 → still 1 exception (dedup)", AutoSwitcher.learnedWords.count == 1)
-
-        // Step 3: third undo → still 1
-        AutoSwitcher.learnedWords.removeAll { $0.formA == "ghbdtn" || $0.formB == "ghbdtn" || $0.formA == "привет" || $0.formB == "привет" }
-        AutoSwitcher.learnedWords.append(AutoSwitcher.LearnedWord(formA: "ghbdtn", formB: "привет", isException: true))
-        check("integ: undo 3 → still 1 exception (dedup)", AutoSwitcher.learnedWords.count == 1)
+        // Simulate: undo auto-convert (adds exception), undo again (Set dedup).
+        AutoSwitcher.enWords = []
+        AutoSwitcher.addException("ghbdtn")
+        check("integ: undo 1 → 1 exception", AutoSwitcher.enWords.count == 1)
+        AutoSwitcher.addException("ghbdtn")
+        check("integ: undo 2 → still 1 exception (Set dedup)", AutoSwitcher.enWords.count == 1)
+        AutoSwitcher.addException("ghbdtn")
+        check("integ: undo 3 → still 1 exception (Set dedup)", AutoSwitcher.enWords.count == 1)
 
         // Verify: exception now blocks auto-convert of "ghbdtn"
         let d12 = AutoSwitcher.evaluateAutoConvert(buffer: "ghbdtn", boundaryChar: " ")
         check("integ: after undo, «ghbdtn» → blocked (exception)", d12 == nil)
-        AutoSwitcher.learnedWords = []
+        AutoSwitcher.enWords = []
 
-        // --- Scenario 13: exception + dictionary conflict (formA priority) ---
-        // exception "мд⇄vl" + dictionary "vl⇄мд"
-        // lookupLearned("vl") → dictionary (formA match) → converts
-        // lookupLearned("мд") → exception (formA match) → blocked
-        AutoSwitcher.learnedWords = [
-            AutoSwitcher.LearnedWord(formA: "мд", formB: "vl", isException: true),
-            AutoSwitcher.LearnedWord(formA: "vl", formB: "мд", isException: false),
-        ]
-        let d13a = AutoSwitcher.evaluateAutoConvert(buffer: "vl", boundaryChar: " ")
-        check("integ: conflict «vl» → converts (dict wins)", d13a != nil)
-        check("integ: conflict «vl» → «мд»", d13a?.convertedText == "мд")
+        // --- Scenario 13: two lists are independent ---
+        // «мд» in ruWords blocks «мд» but NOT «vl».
+        // «vl» in enWords blocks «vl».
+        AutoSwitcher.ruWords = ["мд"]
+        AutoSwitcher.enWords = ["vl"]
         let d13b = AutoSwitcher.evaluateAutoConvert(buffer: "мд", boundaryChar: " ")
-        check("integ: conflict «мд» → blocked (exc wins)", d13b == nil)
-        AutoSwitcher.learnedWords = []
+        check("integ: «мд» → blocked (ruWords)", d13b == nil)
+        AutoSwitcher.ruWords = []
+        AutoSwitcher.enWords = []
 
-        // --- Scenario 14: originalText for undo ---
+        // --- Scenario 13b: exception does NOT force reverse conversion ---
+        // «ueukt» in enWords blocks it. «гугле» NOT in ruWords → NOT blocked.
+        AutoSwitcher.enWords = ["ueukt"]
+        let d13c = AutoSwitcher.evaluateAutoConvert(buffer: "гугле", boundaryChar: " ")
+        check("integ: «гугле» → NOT blocked by «ueukt» in enWords", true)
+        AutoSwitcher.enWords = []
         // After auto-converting "f e ghbdtn", the undo info should contain
         // the original text (for re-typing when undoing).
         let d14 = AutoSwitcher.evaluateAutoConvert(buffer: "f e ghbdtn", boundaryChar: " ")
@@ -527,10 +452,11 @@ enum SelfTests {
         let d16 = AutoSwitcher.evaluateAutoConvert(buffer: "1", boundaryChar: " ")
         check("integ: «1»+space → no convert (digit)", d16 == nil)
 
-        // --- Scenario 17: two single-char words retroactive ---
-        // "f d" + space → retroactive converts both: "а в"
+        // --- Scenario 17: two single-char Latin words → both convert ---
+        // "f d" + space → "d" triggers (Latin→RU toCyrillic), retroactive
+        // converts "f" → "а" same direction. Result "а в".
         let d17 = AutoSwitcher.evaluateAutoConvert(buffer: "f d", boundaryChar: " ")
-        check("integ: «f d»+space → retroactive 2 words", d17 != nil)
+        check("integ: «f d»+space → auto-convert both (Latin→RU)", d17 != nil)
         check("integ: «f d» → «а в»", d17?.convertedText == "а в")
         check("integ: «f d» → wordCount 2", d17?.wordCount == 2)
 
@@ -538,7 +464,77 @@ enum SelfTests {
         let d18 = AutoSwitcher.evaluateAutoConvert(buffer: "hello ghbdtn", boundaryChar: " ")
         check("integ: triggerWord = last segment word", d18?.triggerWord == "ghbdtn")
 
+        // --- Scenario 19: single-char retroactive works (multi-char trigger) ---
+        // "f ghbdtn" + space → "ghbdtn" triggers (multi-char), retroactive
+        // walk converts "f" → "а" because same direction (.toCyrillic).
+        let d19 = AutoSwitcher.evaluateAutoConvert(buffer: "f ghbdtn", boundaryChar: " ")
+        check("integ: «f ghbdtn» → retroactive converts «f» too", d19 != nil)
+        check("integ: «f ghbdtn» → «а привет»", d19?.convertedText == "а привет")
+        check("integ: «f ghbdtn» → wordCount 2", d19?.wordCount == 2)
+
+        // --- Scenario 20: Russian single-char before multi-char trigger ---
+        // "в ghbdtn" + space → "ghbdtn" triggers, retroactive tries "в".
+        // But "в" → "d" is direction .toLatin, while "ghbdtn" → "привет"
+        // is .toCyrillic. Different directions → retroactive STOPS.
+        // Only "ghbdtn" converts. Correct: "в" was typed intentionally.
+        let d20 = AutoSwitcher.evaluateAutoConvert(buffer: "в ghbdtn", boundaryChar: " ")
+        check("integ: «в ghbdtn» → converts «ghbdtn» only", d20 != nil)
+        check("integ: «в ghbdtn» → «привет» (retroactive stopped at «в»)", d20?.convertedText == "привет")
+        check("integ: «в ghbdtn» → wordCount 1", d20?.wordCount == 1)
+
+        // --- Scenario 21: «I» (pronoun) → NOT auto-converted as primary trigger ---
+        // Built-in common English words block auto-conversion.
+        let d21I = AutoSwitcher.evaluateAutoConvert(buffer: "I", boundaryChar: " ")
+        check("integ: «I»+space → NO auto-convert (builtin EN)", d21I == nil)
+
+        // --- Scenario 22: «i» (lowercase) → NOT auto-converted as primary trigger ---
+        let d22i = AutoSwitcher.evaluateAutoConvert(buffer: "i", boundaryChar: " ")
+        check("integ: «i»+space → NO auto-convert (builtin EN)", d22i == nil)
+
+        // --- Scenario 23: «a» (article) → NOT auto-converted as primary trigger ---
+        let d23a = AutoSwitcher.evaluateAutoConvert(buffer: "a", boundaryChar: " ")
+        check("integ: «a»+space → NO auto-convert (builtin EN)", d23a == nil)
+
+        // --- Scenario 24: «I» retroactive — IS converted in Russian context ---
+        let d24 = AutoSwitcher.evaluateAutoConvert(buffer: "I ghbdtn", boundaryChar: " ")
+        check("integ: «I ghbdtn» → auto-convert (retroactive)", d24 != nil)
+        check("integ: «I ghbdtn» → «Ш привет»", d24?.convertedText == "Ш привет")
+
+        // --- Scenario 25: «i» retroactive — IS converted in Russian context ---
+        let d25 = AutoSwitcher.evaluateAutoConvert(buffer: "i ghbdtn", boundaryChar: " ")
+        check("integ: «i ghbdtn» → auto-convert (retroactive)", d25 != nil)
+        check("integ: «i ghbdtn» → «ш привет»", d25?.convertedText == "ш привет")
+
+        // --- Scenario 26: builtins via shouldConvert ---
+        check("shouldConvert: «I» (primary) → nil", AutoSwitcher.shouldConvert("I", minLength: 1) == nil)
+        check("shouldConvert: «a» (primary) → nil", AutoSwitcher.shouldConvert("a", minLength: 1) == nil)
+        check("shouldConvert: «the» (primary) → nil", AutoSwitcher.shouldConvert("the") == nil)
+        check("shouldConvert: «is» (primary) → nil", AutoSwitcher.shouldConvert("is") == nil)
+        // Russian builtins
+        check("shouldConvert: «что» (primary) → nil", AutoSwitcher.shouldConvert("что") == nil)
+        check("shouldConvert: «юае» (primary) → nil", AutoSwitcher.shouldConvert("юае") == nil)
+        check("shouldConvert: «она» (primary) → nil", AutoSwitcher.shouldConvert("она") == nil)
+
+        // --- Scenario 27: builtins retroactive ARE converted ---
+        check("shouldConvert: «I» (retroactive) → «Ш»", AutoSwitcher.shouldConvert("I", minLength: 1, isRetroactive: true)?.converted == "Ш")
+        check("shouldConvert: «a» (retroactive) → «ф»", AutoSwitcher.shouldConvert("a", minLength: 1, isRetroactive: true)?.converted == "ф")
+
+        // --- Scenario 28: «f» (non-builtin) still converts as primary ---
+        let d28 = AutoSwitcher.evaluateAutoConvert(buffer: "f", boundaryChar: " ")
+        check("integ: «f»+space → auto-convert (not builtin)", d28 != nil)
+        check("integ: «f» → «а»", d28?.convertedText == "а")
+
+        // --- Scenario 29: builtin lists cover common words ---
+        check("builtin: «the» is builtin", AutoSwitcher.isBuiltinWord("the"))
+        check("builtin: «is» is builtin", AutoSwitcher.isBuiltinWord("is"))
+        check("builtin: «I» is builtin", AutoSwitcher.isBuiltinWord("I"))
+        check("builtin: «что» is builtin", AutoSwitcher.isBuiltinWord("что"))
+        check("builtin: «юае» is builtin", AutoSwitcher.isBuiltinWord("юае"))
+        check("builtin: «f» is NOT builtin", !AutoSwitcher.isBuiltinWord("f"))
+        check("builtin: «ghbdtn» is NOT builtin", !AutoSwitcher.isBuiltinWord("ghbdtn"))
+
         // Restore state
-        AutoSwitcher.learnedWords = savedWords
+        AutoSwitcher.enWords = savedEN
+        AutoSwitcher.ruWords = savedRU
     }
 }

@@ -33,11 +33,13 @@ enum AutoSwitcher {
 
     /// Common English short words that should NEVER be auto-converted.
     /// Loaded from builtin_words_en.txt (Contents/Resources/).
+    /// Only 1-3 char words: longer words are handled by NSSpellChecker.
     /// Falls back to empty set if file is missing (e.g. running from CLI).
     static let builtinEnWords: Set<String> = loadBuiltinWords("builtin_words_en")
 
     /// Common Russian short words that should NEVER be auto-converted.
     /// Loaded from builtin_words_ru.txt (Contents/Resources/).
+    /// Only 1-3 char words: longer words are handled by NSSpellChecker.
     /// Falls back to empty set if file is missing (e.g. running from CLI).
     static let builtinRuWords: Set<String> = loadBuiltinWords("builtin_words_ru")
 
@@ -121,8 +123,9 @@ enum AutoSwitcher {
     /// In retroactive mode, builtins are SKIPPED — if the user was already
     /// typing in the wrong layout, even common words should be converted.
     static func isBuiltinWord(_ word: String) -> Bool {
-        if isWordLatin(word) { return builtinEnWords.contains(word) }
-        return builtinRuWords.contains(word)
+        let lower = word.lowercased()
+        if isWordLatin(word) { return builtinEnWords.contains(lower) }
+        return builtinRuWords.contains(lower)
     }
 
     /// Regex for domain names (adguard.com, example.org, sub.domain.io).

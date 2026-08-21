@@ -1,0 +1,80 @@
+import Foundation
+
+/// Shared mutable state for the switcher.
+///
+/// The state is shared between `Switcher` (event tap + conversion logic)
+/// and `UIManager` (menu bar, panels, editors). Both hold a reference to
+/// the same `SwitcherState` instance — this avoids circular dependencies
+/// while keeping all state in one traceable place.
+final class SwitcherState {
+
+    // MARK: - Double-Shift detection
+
+    var lastShiftPress: CFTimeInterval = 0
+    var lastShiftRelease: CFTimeInterval = 0
+
+    // MARK: - Conversion flags
+
+    /// True while a conversion (backspace + retype) is in progress.
+    /// Prevents re-entrant conversions and buffers real keystrokes.
+    var busy = false
+
+    /// True during synthetic backspace/type replacement. Real keystrokes
+    /// are buffered in `pendingCharacters` and replayed after.
+    var isReplacing = false
+
+    /// True once the event tap is active (permissions granted).
+    var tapActive = false
+
+    /// After converting a selection via clipboard — true. Another double-Shift
+    /// (with nothing in between) undoes via Cmd+Z toggle.
+    var lastWasSelectionConvert = false
+
+    // MARK: - Auto-convert undo
+
+    /// After auto-converting a word — stores info to undo. Double-Shift right
+    /// after auto-convert reverts to the original text and layout.
+    /// Any real (non-synthetic) keystroke cancels the undo window.
+    var lastAutoConvertInfo: (
+        original: String,
+        backspaceCount: Int,
+        undoToRussian: Bool,
+        triggerWord: String
+    )?
+
+    /// Remembers recent auto-converted word pairs (original → converted).
+    /// Survives real keystrokes (unlike `lastAutoConvertInfo`) so that when
+    /// the user manually converts the result back via clipboard, we can
+    /// detect it and add the trigger word to exceptions.
+    var recentAutoConvertedWords: [(original: String, converted: String)] = []
+    let maxRecentAutoWords = 20
+
+    /// Characters typed during replacement (isReplacing) are buffered here
+    /// and replayed after the replacement completes. Without this, fast
+    /// typists' keystrokes land in wrong positions.
+    var pendingCharacters = ""
+
+    // MARK: - Settings (loaded from UserDefaults)
+
+    /// Auto-learn: if user undoes an auto-conversion, add the word to
+    /// the exceptions list automatically (Caramba-style).
+    var autoLearnExceptions = true
+
+    /// Auto mode (Punto Switcher style): automatically converts words
+    /// at word boundaries using NSSpellChecker.
+    var autoModeEnabled = false
+
+    // MARK: - Typing tracking
+
+    /// A secure field (password) is focused: we neither listen nor convert it.
+    var secureField = false
+
+    /// Typing buffer: remembers what the user typed (like Punto/Caramba).
+    /// This lets us erase with Backspaces and retype the converted text in
+    /// ANY app (VS Code, Slack included) — no Accessibility needed.
+    var typedBuffer = ""
+
+    // MARK: - Event tap retry
+
+    var tapRetryTimer: Timer?
+}

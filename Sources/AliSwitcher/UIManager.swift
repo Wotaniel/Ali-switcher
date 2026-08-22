@@ -415,7 +415,7 @@ final class UIManager: NSObject, NSWindowDelegate {
         // Parse: one word per line.
         var words: Set<String> = []
         for line in text.components(separatedBy: .newlines) {
-            let word = line.trimmingCharacters(in: .whitespaces)
+            let word = line.trimmingCharacters(in: .whitespaces).lowercased()
             guard !word.isEmpty else { continue }
             words.insert(word)
         }

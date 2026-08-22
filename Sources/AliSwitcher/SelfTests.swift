@@ -733,7 +733,8 @@ enum SelfTests {
         check("plan: «I ghbdtn» → wordCount 2", p38e?.wordCount == 2)
 
         // Auto mode: exceptions DO block in retroactive
-        AutoSwitcher.enWords = ["I"]
+        // Note: enWords stores lowercase — "I" → "i"
+        AutoSwitcher.enWords = ["i"]
         let p38f = AutoSwitcher.findConversionRange(in: "I ghbdtn", isManual: false)
         check("plan: «I ghbdtn» (auto, «I» in exceptions) → «привет» only", p38f?.convertedText == "привет")
         AutoSwitcher.enWords = []

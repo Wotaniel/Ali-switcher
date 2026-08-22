@@ -407,16 +407,19 @@ enum AutoSwitcher {
     /// Is this word in the user's exception list (should NOT be auto-converted)?
     /// Checks the correct list based on the word's script.
     static func isLearnedException(_ word: String) -> Bool {
-        if isWordLatin(word) { return enWords.contains(word) }
-        return ruWords.contains(word)
+        let lower = word.lowercased()
+        if isWordLatin(word) { return enWords.contains(lower) }
+        return ruWords.contains(lower)
     }
 
     /// Add a word to the appropriate exception list (auto-learn on undo).
+    /// Always lowercases — exceptions are case-insensitive.
     static func addException(_ word: String) {
+        let lower = word.lowercased()
         if isWordLatin(word) {
-            enWords.insert(word)
+            enWords.insert(lower)
         } else {
-            ruWords.insert(word)
+            ruWords.insert(lower)
         }
     }
 

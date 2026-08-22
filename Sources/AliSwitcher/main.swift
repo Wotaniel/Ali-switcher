@@ -68,10 +68,10 @@ func log(_ message: String) {
 func loadLearnedWords() {
     // New format: two separate arrays.
     if let en = UserDefaults.standard.array(forKey: "enWords") as? [String] {
-        AutoSwitcher.enWords = Set(en)
+        AutoSwitcher.enWords = Set(en.map { $0.lowercased() })
     }
     if let ru = UserDefaults.standard.array(forKey: "ruWords") as? [String] {
-        AutoSwitcher.ruWords = Set(ru)
+        AutoSwitcher.ruWords = Set(ru.map { $0.lowercased() })
     }
 
     // Migrate old "learnedWords" format (formA\tformB\texc/dict).

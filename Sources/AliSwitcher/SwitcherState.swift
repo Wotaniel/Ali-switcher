@@ -21,12 +21,25 @@ final class SwitcherState {
 
     /// True during synthetic backspace/type replacement. Real keystrokes
     /// are buffered in `pendingCharacters` and replayed after.
-    var isReplacing = false
+    /// didSet auto-logs every transition with duration for diagnostics.
+    var isReplacing = false {
+        didSet {
+            guard isReplacing != oldValue else { return }
+            if isReplacing {
+                isReplacingSince = CFAbsoluteTimeGetCurrent()
+                log("▸ isReplacing START")
+            } else {
+                let elapsed = CFAbsoluteTimeGetCurrent() - isReplacingSince
+                log("▸ isReplacing END (\(String(format: "%.3f", elapsed))s)")
+            }
+        }
+    }
 
     /// Safety timeout: if isReplacing is true for longer than this, force-reset.
     /// Prevents keyboard from being permanently stuck if a completion never fires.
+    /// Conversions typically take ~0.4s; 1.5s gives a 4x safety margin.
     var isReplacingSince: CFTimeInterval = 0
-    static let isReplacingTimeout: CFTimeInterval = 3.0
+    static let isReplacingTimeout: CFTimeInterval = 1.5
 
     /// Generation token for async callback invalidation (BUG #4/#5 fix).
     /// Incremented on every invalidation event (timeout force-reset, .reset

@@ -276,7 +276,11 @@ final class Switcher {
                         state.pendingCharacters.append(s)
                         return nil  // swallow printable chars — replayed after
                     case .deleteBackward:
-                        if !state.pendingCharacters.isEmpty { state.pendingCharacters.removeLast() }
+                        if !state.pendingCharacters.isEmpty {
+                            state.pendingCharacters.removeLast()
+                        } else {
+                            log("⚠  backspace swallowed during isReplacing — buffer empty, key LOST")
+                        }
                         return nil  // swallow backspace — adjusted in buffer
                     case .reset:
                         // Enter, Tab, arrows, Home/End — let them through.

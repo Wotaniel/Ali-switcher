@@ -52,6 +52,14 @@ final class UIManager: NSObject, NSWindowDelegate {
     private var ruWordsPanel: NSPanel?
     private var ruWordsTextView: NSTextView?
 
+    /// True if any word-list editor panel is currently visible.
+    /// Checked by Switcher.handle() to suppress auto-convert while the user
+    /// is typing in our own text fields (otherwise auto-convert would
+    /// convert the words they're trying to add as exceptions).
+    var anyEditorVisible: Bool {
+        enWordsPanel?.isVisible ?? false || ruWordsPanel?.isVisible ?? false
+    }
+
     // MARK: - Permissions panel
 
     private var permissionsPanel: NSPanel?

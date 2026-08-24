@@ -514,13 +514,21 @@ enum AutoSwitcher {
             return nil  // user undid this conversion before — don't repeat
         }
 
-        // 4c) Single-char words: convert immediately (spell-checker is useless
-        // for 1-letter words — considers everything "valid").
-        // Builtin lists protect common words: «а», «в», «и» (RU), «I», «a» (EN)
-        // are checked in step 4a → won't reach here. Uncommon single chars
-        // like «ф»→«a», «й»→«q» WILL convert — almost certainly wrong layout.
+        // 4c) Single-char words: convert ONLY if the result is a builtin word.
+        // Real single-char words are rare: «а», «в», «и» (RU), «I», «a» (EN).
+        // If the converted char is in the builtin list → it's a real word,
+        // the user typed it in the wrong layout → convert.
+        // If NOT in builtin → don't touch it (almost certainly intentional).
+        // Examples:
+        //   «d» → «в» ✓ (в is builtin RU)    «f» → «а» ✓ (а is builtin RU)
+        //   «Ш» → «I» ✓ (I is builtin EN)   «ш» → «i» ✓ (i is builtin EN)
+        //   «g» → «п» ✗ (п NOT builtin)     «q» → «й» ✗ (й NOT builtin)
+        //   «п» → «g» ✗ (g NOT builtin)     «ъ» → «]» ✗ (] not even a letter)
         if word.count == 1, minLength <= 1 {
-            return result
+            if isBuiltinWord(result.converted) {
+                return result
+            }
+            return nil
         }
 
         // 4d) Mixed-script word: contains BOTH Cyrillic AND Latin letters.

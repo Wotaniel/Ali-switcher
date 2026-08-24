@@ -3,6 +3,41 @@
 All notable changes to AliSwitcher are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/), dates in ISO 8601.
 
+## [1.2.0] — 2026-08-24
+
+### Added
+- **Auto build number + git hash** — `CFBundleVersion` now tracks git commit count (always increases); new `GitHash` plist key stores short commit hash. About panel shows `Version 1.2.0 (build N, abc1234)`. Makes every build identifiable even within the same version.
+- **Builtin word lists in external `.txt` files** — `builtin_words_en.txt` (109 words) and `builtin_words_ru.txt` (80 words), one word per line with `#` comments. Loaded at startup via `Bundle.main` with fallback to empty set. `build.sh` copies both to `Contents/Resources/`. No more hardcoded word arrays in `AutoSwitcher.swift`.
+- **`hasMixedScript` helper** — detects words containing BOTH Cyrillic AND Latin letters (never occurs in legitimate text). Mixed-script words skip spell-checker entirely (NSSpellChecker can't reason about them — treated «nj» in «Э"nj» as valid English abbreviation NJ = New Jersey → blocked conversion). Mixed script → unambiguous wrong-layout → convert directly.
+- **Typographic quote normalization** — `Translit.convert()` normalizes smart quotes (`U+201C`/`U+201D` → `"`, `U+2018`/`U+2019` → `'`) before map lookup. macOS Smart Quotes feature was replacing ASCII quotes, which aren't in the ЙЦУКЕН↔QWERTY map → quotes passed through unchanged.
+- **`anyEditorVisible` property** in `UIManager` — auto-convert suppressed while word-list editor windows are open. Prevents auto-convert from interfering with typing in editor panels.
+- **`isReplacing` didSet observer** — auto-logs START/END with duration for every conversion. Diagnostic for user-reported "backspace disabled" (shows exactly when/how long isReplacing was active).
+- **Backspace loss diagnostic log** — logs when backspace is swallowed during `isReplacing` with empty `pendingCharacters` buffer (key lost).
+- **Versioned DMG names** — `make-dmg.sh` reads `VERSION` → `dist/AliSwitcher-1.2.0.dmg`. Old DMGs cleaned before build (no more `AliSwitcher 2.dmg` copies).
+- ~38 new tests (232 → 270 assertions): `hasMixedScript`, typographic quotes, single-char builtin-only rules (both directions), manual retro walk regression, all-caps conversion.
+
+### Fixed
+- **Single-char over-conversion** (#12): single-char words converted one direction (Latin→Cyrillic) but not the other. Now: a single-char converts ONLY if its result is in the builtin list — works both directions. `d→в ✓`, `f→а ✓`, `g→п ✗`, `q→й ✗`, `Ш→I ✓`, `ъ→] ✗`.
+- **Mixed-script words blocked** (#11): `shouldConvert` now checks `hasMixedScript` BEFORE spell-checker (step 4d). Mixed → return conversion directly, no spell-checker.
+- **Manual mode over-correction** (#14 → #16): PR #14 disabled ALL spell-checker in manual retro walk — valid words like «есть», «термин» had no guard → «есть термин АГВ» converted all 3 words. Fix: split into `origMisspelled` (runs in BOTH modes — stops on valid words) and `convValid` (auto-only per AGENTS.md). All-caps bypass for acronyms (ЕРФТЛ→THANK works).
+- **Case-insensitive exception lists** (#8): words starting with uppercase (The, Мы, It) now match lowercase variants in exception lists. All operations (`isLearnedException`, `addException`, `saveWordsFromEditor`, `loadLearnedWords`) lowercase before insert/lookup.
+- **«б» missing from RU builtins** (#9): Russian particle «б» was not in builtin list → single-char `б` passed shouldConvert → auto-convert fired on «ну ток я б» → «z ,».
+- **Auto-convert in editor panels** (#12): auto-convert was firing while typing in word-list editor windows. Now suppressed via `anyEditorVisible` check.
+
+### Changed
+- `isReplacingTimeout`: 3.0s → 1.5s (conversions take ~0.4s, 4x safety margin). Reduces keyboard-dead window if conversion ever stalls.
+- Builtins: English 906→109 words, Russian 612→80 words (removed Scrabble junk like `aa`, `bae`, `qi`, `xu`, `ви`, `нё` — kept only real common 1-3 char words).
+- Removed «vs» from EN builtins (#7): `vs` on QWERTY = `мы` on ЙЦУКЕН — both were builtins, redundant. Kept only Russian variant.
+- Added ё/е variants for Russian builtins (всё/все, ещё/еще, etc.).
+- `minWordLength`: 2 → 1 (single-char words can trigger auto-convert, protected by builtin lists).
+- `findConversionRange` retro walk: identical rules for manual and auto (was: `!isManual` guards on spell-checker). Exception: selection convert is still separate (no checks at all).
+- `isBuiltinWord` now case-insensitive (lowercase lookup) — uppercase «I» no longer bypasses builtin check.
+- `README.md` rewritten to cover all functionality.
+
+### Removed
+- Hardcoded builtin word arrays in `AutoSwitcher.swift` (replaced by txt files).
+- Stale DMG files: `AliSwitcher 2.dmg`, `AliSwitcher 3.dmg`, `AliSwitcher 4.dmg`, `AliSwitcher 5.dmg`, `AliSwitcher.dmg` (replaced by single versioned `AliSwitcher-1.2.0.dmg`).
+
 ## [1.1.0] — 2026-08-22
 
 ### Added

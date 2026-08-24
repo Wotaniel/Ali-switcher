@@ -53,9 +53,26 @@ enum Translit {
 
     /// Determines the direction by the majority of letters and returns the converted text.
     static func convert(_ text: String) -> (converted: String, direction: SwitchDirection)? {
+        // Normalize typographic quotes to ASCII (macOS Smart Quotes feature).
+        // macOS replaces " with \u201C/\u201D and ' with \u2018/\u2019.
+        // These aren't in the transliteration map, so without normalization
+        // they pass through unchanged and break conversion.
+        //   " (U+201C) → " (U+0022, Shift+э key in QWERTY → Э in RU)
+        //   ' (U+2018) → ' (U+0027, э key in QWERTY → э in RU)
+        let normalized: String
+        if text.contains(where: { "\u{201C}\u{201D}\u{2018}\u{2019}".contains($0) }) {
+            normalized = text
+                .replacingOccurrences(of: "\u{201C}", with: "\"")
+                .replacingOccurrences(of: "\u{201D}", with: "\"")
+                .replacingOccurrences(of: "\u{2018}", with: "'")
+                .replacingOccurrences(of: "\u{2019}", with: "'")
+        } else {
+            normalized = text
+        }
+
         var cyrillic = 0
         var latin = 0
-        for ch in text {
+        for ch in normalized {
             if ch.isLetter {
                 if isCyrillic(ch) { cyrillic += 1 } else { latin += 1 }
             }
@@ -63,15 +80,15 @@ enum Translit {
         guard cyrillic > 0 || latin > 0 else {
             // No letters — but characters like [, ], ', ; are on different keys
             // in RU vs EN layouts. Check if any character is in a translit map.
-            for ch in text {
+            for ch in normalized {
                 if enToRu[ch] != nil {
                     // English-layout character (e.g. '[' → 'х')
-                    let converted = String(text.map { enToRu[$0] ?? $0 })
+                    let converted = String(normalized.map { enToRu[$0] ?? $0 })
                     return (converted, .toCyrillic)
                 }
                 if ruToEn[ch] != nil {
                     // Russian-layout character (e.g. '.' → '/')
-                    let converted = String(text.map { ruToEn[$0] ?? $0 })
+                    let converted = String(normalized.map { ruToEn[$0] ?? $0 })
                     return (converted, .toLatin)
                 }
             }
@@ -80,7 +97,7 @@ enum Translit {
 
         let toLatin = cyrillic >= latin
         let map: [Character: Character] = toLatin ? ruToEn : enToRu
-        let converted = String(text.map { map[$0] ?? $0 })
+        let converted = String(normalized.map { map[$0] ?? $0 })
         let direction: SwitchDirection = toLatin ? .toLatin : .toCyrillic
         return (converted, direction)
     }

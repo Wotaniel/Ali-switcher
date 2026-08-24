@@ -342,6 +342,21 @@ enum SelfTests {
         check("translit: «Ш» → «I» (uppercase reverse)",
               Translit.convert("Ш")?.converted == "I")
 
+        // Typographic quotes (macOS Smart Quotes): normalize to ASCII
+        // " (U+201C) → " (U+0022) → Э (same as Shift+э in QWERTY)
+        // ' (U+2018) → ' (U+0027) → э (same as э key in QWERTY)
+        check("translit: typographic «\\u201C\"gbr» → «Эпик»",
+              Translit.convert("\u{201C}gbr")?.converted == "Эпик")
+        check("translit: typographic «gbr\\u201D» → «пикЭ»",
+              Translit.convert("gbr\u{201D}")?.converted == "пикЭ")
+        check("translit: typographic «\\u2018gbr» → «эпик»",
+              Translit.convert("\u{2018}gbr")?.converted == "эпик")
+        check("translit: typographic «gbr\\u2019» → «пикэ»",
+              Translit.convert("gbr\u{2019}")?.converted == "пикэ")
+        // RU→EN: typographic " → " → @ (from Shift+2 in Russian layout)
+        check("translit: typographic RU «\\u201Cприв» → «@ghbd»",
+              Translit.convert("\u{201C}прив")?.converted == "@ghbd")
+
         // Restore state
         AutoSwitcher.enWords = savedEN
         AutoSwitcher.ruWords = savedRU

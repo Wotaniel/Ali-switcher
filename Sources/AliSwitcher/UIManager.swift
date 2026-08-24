@@ -527,7 +527,7 @@ final class UIManager: NSObject, NSWindowDelegate {
         let alert = NSAlert()
         alert.messageText = "AliSwitcher"
         alert.informativeText = """
-            Version \(kAppVersion)
+            Version \(kAppVersion) (build \(kBuildNumber), \(kGitHash))
 
             macOS layout switcher (RU↔EN).
             Mini-analog of Punto/Caramba Switcher.

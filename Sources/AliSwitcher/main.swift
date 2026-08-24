@@ -12,6 +12,22 @@ let kAppVersion: String = {
     return "1.0.0"
 }()
 
+/// Build number (git commit count — always increases with each commit).
+let kBuildNumber: String = {
+    if let b = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String, !b.isEmpty {
+        return b
+    }
+    return "?"
+}()
+
+/// Git short hash of the commit this build was made from (for identification).
+let kGitHash: String = {
+    if let h = Bundle.main.object(forInfoDictionaryKey: "GitHash") as? String, !h.isEmpty {
+        return h
+    }
+    return "dev"
+}()
+
 /// Max pause between two Shift presses considered a "double-Shift" (sec).
 let kDoubleShiftInterval: TimeInterval = 0.25
 /// Typing buffer length limit (protection against unbounded growth).

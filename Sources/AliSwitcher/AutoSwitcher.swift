@@ -102,6 +102,21 @@ enum AutoSwitcher {
         boundaries.contains(ch) || ch.isWhitespace
     }
 
+    /// Does the word contain BOTH Cyrillic AND Latin letters?
+    /// A real word is always single-script — mixed script means the user
+    /// changed layout mid-word (or had a leftover char from previous typing).
+    /// NSSpellChecker can't reliably reason about mixed-script words, so
+    /// callers (e.g. shouldConvert) treat this as an unambiguous wrong-layout
+    /// signal and skip the spell-checker.
+    static func hasMixedScript(_ word: String) -> Bool {
+        var hasCyrillic = false
+        var hasLatin = false
+        for ch in word where ch.isLetter {
+            if Translit.isCyrillic(ch) { hasCyrillic = true } else { hasLatin = true }
+        }
+        return hasCyrillic && hasLatin
+    }
+
     /// Should this word be skipped entirely (URL, email, path, code)?
     static func isNonConvertible(_ word: String) -> Bool {
         let range = NSRange(word.startIndex..<word.endIndex, in: word)
@@ -301,7 +316,10 @@ enum AutoSwitcher {
             }
 
             // Spell-checker for non-builtin words (≥2 chars).
-            if !isBuiltinWord(prevSeg.word), prevSeg.word.count >= 2 {
+            // Skip for mixed-script words — NSSpellChecker can't reason about
+            // them (see hasMixedScript comment), and they're always wrong-layout.
+            if !isBuiltinWord(prevSeg.word), prevSeg.word.count >= 2,
+               !hasMixedScript(prevSeg.word) {
                 let origMisspelled = checker.checkSpelling(
                     of: prevSeg.word, startingAt: 0,
                     language: origLang, wrap: false,
@@ -502,6 +520,18 @@ enum AutoSwitcher {
         // are checked in step 4a → won't reach here. Uncommon single chars
         // like «ф»→«a», «й»→«q» WILL convert — almost certainly wrong layout.
         if word.count == 1, minLength <= 1 {
+            return result
+        }
+
+        // 4d) Mixed-script word: contains BOTH Cyrillic AND Latin letters.
+        // A real word is always single-script — mixed script means the user
+        // changed layout mid-word. NSSpellChecker can't reason about mixed
+        // scripts (splits on punctuation, considers single-letter fragments
+        // "valid"), so we skip spell-checker entirely and convert directly.
+        // Example: «Э"nj» (Cyrillic Э leftover + ASCII " (Shift+э) + Latin nj)
+        // → «ЭЭто» — spell-checker thought «nj» was a valid English abbreviation
+        // and rejected conversion. With mixed-script detection: convert freely.
+        if hasMixedScript(word) {
             return result
         }
 

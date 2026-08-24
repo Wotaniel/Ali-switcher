@@ -357,6 +357,31 @@ enum SelfTests {
         check("translit: typographic RU «\\u201Cприв» → «@ghbd»",
               Translit.convert("\u{201C}прив")?.converted == "@ghbd")
 
+        // Mixed-script detection: words with BOTH Cyrillic AND Latin letters
+        // are always wrong-layout typos. Skip spell-checker. Bypasses cases
+        // like «Э"nj» (Cyrillic Э leftover + ASCII " + Latin nj) where
+        // NSSpellChecker considered «nj» a valid English abbreviation → nil.
+        // Without this rule, shouldConvert returns nil → auto-convert never fires.
+        check("hasMixedScript: «Э\"nj» → true (Cyrillic Э + Latin nj)",
+              AutoSwitcher.hasMixedScript("Э\"nj") == true)
+        check("hasMixedScript: «hello» → false (single Latin)",
+              AutoSwitcher.hasMixedScript("hello") == false)
+        check("hasMixedScript: «привет» → false (single Cyrillic)",
+              AutoSwitcher.hasMixedScript("привет") == false)
+        check("hasMixedScript: «макOS» → true (Cyrillic мак + Latin OS)",
+              AutoSwitcher.hasMixedScript("макOS") == true)
+        check("hasMixedScript: «\"» → false (no letters)",
+              AutoSwitcher.hasMixedScript("\"") == false)
+        check("hasMixedScript: empty → false",
+              AutoSwitcher.hasMixedScript("") == false)
+        // Real bug case: «Э"nj» → «ЭЭто» (the original bug from user logs)
+        check("mixed: «Э\"nj» shouldConvert → «ЭЭто»",
+              AutoSwitcher.shouldConvert("Э\"nj")?.converted == "ЭЭто")
+        // Direction: cyr=3 (мак) > lat=2 (OS) → toLatin → м→v, а→f, к→r
+        // (QWERTY positions in ЙЦУКЕН). Latin O/S unchanged (not in ruToEn).
+        check("mixed: «макOS» shouldConvert → «vfrOS»",
+              AutoSwitcher.shouldConvert("макOS")?.converted == "vfrOS")
+
         // Restore state
         AutoSwitcher.enWords = savedEN
         AutoSwitcher.ruWords = savedRU

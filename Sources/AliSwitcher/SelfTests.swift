@@ -14,6 +14,7 @@ enum SelfTests {
         testTypingMap()
         testAutoSwitcherEdgeCases()
         testIntegrationAutoConvert()
+        testAllCapsConversion()
 
         print("")
         print("— Result —")
@@ -778,12 +779,12 @@ enum SelfTests {
         check("plan: «f ghbdtn» (manual) → «а привет»", p38b?.convertedText == "а привет")
         check("plan: «f ghbdtn» → wordCount 2", p38b?.wordCount == 2)
 
-        // Manual: valid word stops the walk (not misspelled → typed intentionally)
+        // Manual: NO spell-checker — valid words still convert (user asked for it)
+        // «hello» is valid EN, but manual mode doesn't care → «руддщ»
         let p38c = AutoSwitcher.findConversionRange(in: "hello ghbdtn", isManual: true)
-        check("plan: «hello ghbdtn» (manual) → «привет» only", p38c?.convertedText == "привет")
-        check("plan: «hello ghbdtn» → prefix «hello »", p38c?.prefix == "hello ")
-        check("plan: «hello ghbdtn» → wordCount 1", p38c?.wordCount == 1)
-        check("plan: «hello ghbdtn» → deleteCount 6", p38c?.deleteCount == 6)
+        check("plan: «hello ghbdtn» (manual) → «руддщ привет»", p38c?.convertedText == "руддщ привет")
+        check("plan: «hello ghbdtn» → wordCount 2", p38c?.wordCount == 2)
+        check("plan: «hello ghbdtn» → prefix «»", p38c?.prefix == "")
 
         // Manual: different script stops the walk
         let p38d = AutoSwitcher.findConversionRange(in: "ghbdtn слово", isManual: true)
@@ -816,6 +817,50 @@ enum SelfTests {
         check("plan: «ghbdtn » (trailing space) → convertedText «привет»", p38h?.convertedText == "привет")
         check("plan: «ghbdtn » → lastGap « »", p38h?.lastGap == " ")
         check("plan: «ghbdtn » → deleteCount 6 (no trailing gap)", p38h?.deleteCount == 6)
+
+        // Restore state
+        AutoSwitcher.enWords = savedEN
+        AutoSwitcher.ruWords = savedRU
+    }
+
+    // --- Scenario 39: all-caps words in manual mode (no spell-checker checks) ---
+    // Manual mode (double-Shift): user explicitly asked to convert — NO spell-checker,
+    // NO exceptions, NO builtins. Just convert everything.
+    // «ЕРФТЛ» was blocked because NSSpellChecker treats all-caps as acronyms (valid).
+    // Fix: skip spell-checker entirely in manual mode.
+    static func testAllCapsConversion() {
+        print("— All-caps conversion (manual mode skips spell-check) —")
+
+        // Save state (tests modify enWords/ruWords).
+        let savedEN = AutoSwitcher.enWords
+        let savedRU = AutoSwitcher.ruWords
+        AutoSwitcher.enWords = []
+        AutoSwitcher.ruWords = []
+
+        // Manual findConversionRange: all-caps Cyrillic → Latin, NO spell-checker
+        // «ЕРФТЛ НЩГ» → «THANK YOU» — both words all-caps, both convert (no checks)
+        let p39a = AutoSwitcher.findConversionRange(in: "ЕРФТЛ НЩГ", isManual: true)
+        check("plan: «ЕРФТЛ НЩГ» (manual) → «THANK YOU»", p39a?.convertedText == "THANK YOU")
+        check("plan: «ЕРФТЛ НЩГ» → wordCount 2", p39a?.wordCount == 2)
+
+        // Manual: single all-caps word
+        let p39b = AutoSwitcher.findConversionRange(in: "ЕРФТЛ", isManual: true)
+        check("plan: «ЕРФТЛ» (manual) → «THANK»", p39b?.convertedText == "THANK")
+
+        // Manual: Title case (mixed caps)
+        let p39c = AutoSwitcher.findConversionRange(in: "Ghbdtn", isManual: true)
+        check("plan: «Ghbdtn» (manual) → «Привет»", p39c?.convertedText == "Привет")
+
+        // Manual: even learned exceptions don't block
+        AutoSwitcher.enWords = ["ghbdtn"]
+        let p39e = AutoSwitcher.findConversionRange(in: "ghbdtn", isManual: true)
+        check("plan: «ghbdtn» (manual, in exceptions) → «привет»", p39e?.convertedText == "привет")
+
+        // Auto mode: all-caps blocked at shouldConvert step 3 (abbreviation filter)
+        // «ЕРФТЛ НЩГ» — НЩГ is all-caps → step 3 returns nil → entire plan is nil
+        // This is intentional: all-caps in auto mode = abbreviation (HTML, JSON, etc.)
+        let p39f = AutoSwitcher.findConversionRange(in: "ЕРФТЛ НЩГ", isManual: false)
+        check("plan: «ЕРФТЛ НЩГ» (auto) → nil (all-caps blocked at step 3)", p39f == nil)
 
         // Restore state
         AutoSwitcher.enWords = savedEN

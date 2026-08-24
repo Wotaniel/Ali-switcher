@@ -318,7 +318,9 @@ enum AutoSwitcher {
             // Spell-checker for non-builtin words (≥2 chars).
             // Skip for mixed-script words — NSSpellChecker can't reason about
             // them (see hasMixedScript comment), and they're always wrong-layout.
-            if !isBuiltinWord(prevSeg.word), prevSeg.word.count >= 2,
+            // Spell-checker ONLY for auto-convert. Manual mode: user explicitly
+            // asked to convert — no dictionary checks, just convert everything.
+            if !isManual, !isBuiltinWord(prevSeg.word), prevSeg.word.count >= 2,
                !hasMixedScript(prevSeg.word) {
                 let origMisspelled = checker.checkSpelling(
                     of: prevSeg.word, startingAt: 0,
@@ -342,7 +344,8 @@ enum AutoSwitcher {
             }
 
             // Exceptions block (user undid this word before).
-            if isLearnedException(prevSeg.word) {
+            // Manual mode: user explicitly wants conversion — ignore exceptions.
+            if !isManual, isLearnedException(prevSeg.word) {
                 log("findRange[\(mode)]: retro «\(prevSeg.word)» → stop (learned exception)")
                 break
             }

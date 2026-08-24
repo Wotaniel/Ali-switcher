@@ -779,12 +779,14 @@ enum SelfTests {
         check("plan: «f ghbdtn» (manual) → «а привет»", p38b?.convertedText == "а привет")
         check("plan: «f ghbdtn» → wordCount 2", p38b?.wordCount == 2)
 
-        // Manual: NO spell-checker — valid words still convert (user asked for it)
-        // «hello» is valid EN, but manual mode doesn't care → «руддщ»
+        // Manual: origMisspelled check DOES run — valid words stay.
+        // «hello» is valid EN → spell-checker stops retro walk.
+        // Only «ghbdtn» (gibberish EN) converts. Last word always converts in manual.
+        // All-caps words bypass spell-checker (NSSpellChecker false-positives on acronyms).
         let p38c = AutoSwitcher.findConversionRange(in: "hello ghbdtn", isManual: true)
-        check("plan: «hello ghbdtn» (manual) → «руддщ привет»", p38c?.convertedText == "руддщ привет")
-        check("plan: «hello ghbdtn» → wordCount 2", p38c?.wordCount == 2)
-        check("plan: «hello ghbdtn» → prefix «»", p38c?.prefix == "")
+        check("plan: «hello ghbdtn» (manual) → «привет» (only last)", p38c?.convertedText == "привет")
+        check("plan: «hello ghbdtn» → wordCount 1", p38c?.wordCount == 1)
+        check("plan: «hello ghbdtn» → prefix «hello »", p38c?.prefix == "hello ")
 
         // Manual: different script stops the walk
         let p38d = AutoSwitcher.findConversionRange(in: "ghbdtn слово", isManual: true)
@@ -827,7 +829,9 @@ enum SelfTests {
     // Manual mode (double-Shift): user explicitly asked to convert — NO spell-checker,
     // NO exceptions, NO builtins. Just convert everything.
     // «ЕРФТЛ» was blocked because NSSpellChecker treats all-caps as acronyms (valid).
-    // Fix: skip spell-checker entirely in manual mode.
+    // Fix: skip spell-checker for all-caps in manual retro walk; run origMisspelled
+    // for normal words (lowercase/title) — otherwise valid words like «есть»
+    // get converted when user only wanted last word.
     static func testAllCapsConversion() {
         print("— All-caps conversion (manual mode skips spell-check) —")
 
@@ -861,6 +865,29 @@ enum SelfTests {
         // This is intentional: all-caps in auto mode = abbreviation (HTML, JSON, etc.)
         let p39f = AutoSwitcher.findConversionRange(in: "ЕРФТЛ НЩГ", isManual: false)
         check("plan: «ЕРФТЛ НЩГ» (auto) → nil (all-caps blocked at step 3)", p39f == nil)
+
+        // Regression: «есть термин АГВ» (manual) — only last word converts.
+        // «есть» and «термин» are valid Russian words → spell-checker stops retro walk.
+        // «АГВ» is all-caps and is the last word → always converts in manual.
+        // convertedText holds only the converted portion (last word); prefix is the rest.
+        let p40a = AutoSwitcher.findConversionRange(in: "есть термин АГВ", isManual: true)
+        check("plan: «есть термин АГВ» (manual) → convertedText «FUD»", p40a?.convertedText == "FUD")
+        check("plan: «есть термин АГВ» → prefix «есть термин »", p40a?.prefix == "есть термин ")
+        check("plan: «есть термин АГВ» → wordCount 1", p40a?.wordCount == 1)
+
+        // Regression: «привет мир АГВ» — valid Russian + valid Russian + all-caps
+        // Only АГВ converts. prefix holds the two unconverted words.
+        let p40b = AutoSwitcher.findConversionRange(in: "привет мир АГВ", isManual: true)
+        check("plan: «привет мир АГВ» (manual) → convertedText «FUD»", p40b?.convertedText == "FUD")
+        check("plan: «привет мир АГВ» → prefix «привет мир »", p40b?.prefix == "привет мир ")
+        check("plan: «привет мир АГВ» → wordCount 1", p40b?.wordCount == 1)
+
+        // Regression: gibberish wrong-layout words still all convert in manual retro
+        // «Ghbdtn Dsgtq cfv» — all misspelled in EN → all convert to valid RU.
+        // (Dsgtq → Выпей, not Выйди — Translit is literal, not semantic.)
+        let p40c = AutoSwitcher.findConversionRange(in: "Ghbdtn Dsgtq cfv", isManual: true)
+        check("plan: «Ghbdtn Dsgtq cfv» (manual) → «Привет Выпей сам»", p40c?.convertedText == "Привет Выпей сам")
+        check("plan: «Ghbdtn Dsgtq cfv» → wordCount 3", p40c?.wordCount == 3)
 
         // Restore state
         AutoSwitcher.enWords = savedEN

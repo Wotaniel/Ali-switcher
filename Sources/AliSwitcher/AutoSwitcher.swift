@@ -318,9 +318,18 @@ enum AutoSwitcher {
             // Spell-checker for non-builtin words (≥2 chars).
             // Skip for mixed-script words — NSSpellChecker can't reason about
             // them (see hasMixedScript comment), and they're always wrong-layout.
-            // Spell-checker ONLY for auto-convert. Manual mode: user explicitly
-            // asked to convert — no dictionary checks, just convert everything.
-            if !isManual, !isBuiltinWord(prevSeg.word), prevSeg.word.count >= 2,
+            // Skip for all-caps words — NSSpellChecker treats them as valid
+            // acronyms (HTML, JSON), but in manual mode the user may have typed
+            // them in the wrong layout (ЕРФТЛ → THANK). All-caps bypasses.
+            //
+            // origMisspelled (word is gibberish in own language) runs in BOTH
+            // modes — otherwise valid words like «есть»/«термин» get converted
+            // when user only wanted the last word (BUG: «есть термин АГВ» case).
+            // convValid (converted is valid in target language) is auto-only
+            // per AGENTS.md: "no convValid in manual".
+            let prevLetters = prevSeg.word.filter { $0.isLetter }
+            let prevAllCaps = prevLetters.count > 1 && prevLetters.allSatisfy({ $0.isUppercase })
+            if !prevAllCaps, !isBuiltinWord(prevSeg.word), prevSeg.word.count >= 2,
                !hasMixedScript(prevSeg.word) {
                 let origMisspelled = checker.checkSpelling(
                     of: prevSeg.word, startingAt: 0,
@@ -332,14 +341,18 @@ enum AutoSwitcher {
                     break
                 }
 
-                let convValid = checker.checkSpelling(
-                    of: prevResult.converted, startingAt: 0,
-                    language: convLang, wrap: false,
-                    inSpellDocumentWithTag: 0, wordCount: nil
-                ).location == NSNotFound
-                if !convValid, !matchesDomainPattern(prevResult.converted) {
-                    log("findRange[\(mode)]: retro «\(prevSeg.word)» → stop (converted «\(prevResult.converted)» invalid in \(convLang))")
-                    break
+                // convValid check (converted must be valid in target language)
+                // is auto-only — manual mode: user explicitly asked.
+                if !isManual {
+                    let convValid = checker.checkSpelling(
+                        of: prevResult.converted, startingAt: 0,
+                        language: convLang, wrap: false,
+                        inSpellDocumentWithTag: 0, wordCount: nil
+                    ).location == NSNotFound
+                    if !convValid, !matchesDomainPattern(prevResult.converted) {
+                        log("findRange[\(mode)]: retro «\(prevSeg.word)» → stop (converted «\(prevResult.converted)» invalid in \(convLang))")
+                        break
+                    }
                 }
             }
 

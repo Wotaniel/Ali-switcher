@@ -290,7 +290,7 @@ final class Switcher {
             // and re-type it after conversion — otherwise backspace erases
             // the wrong characters (space is already printed after the word).
             // Cache KeyTracker.action to avoid calling it twice per keystroke.
-            if state.autoModeEnabled, !state.busy, !state.isReplacing, !state.secureField, !isSynthetic(event) {
+            if state.autoModeEnabled, !state.busy, !state.isReplacing, !state.secureField, !isSynthetic(event), !ui.anyEditorVisible {
                 if let layout = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() {
                     let action = KeyTracker.action(for: event, currentLayout: layout)
                     if case .text(let s) = action, s.count == 1, AutoSwitcher.isBoundary(s[s.startIndex]) {

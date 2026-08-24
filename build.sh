@@ -18,7 +18,15 @@ mkdir -p build
 # Read version from VERSION file (default: 1.0.0)
 VERSION=$(cat VERSION 2>/dev/null | tr -d '[:space:]')
 : "${VERSION:=1.0.0}"
-echo "▸ Version: $VERSION"
+
+# Build number: git commit count (always increases with each commit).
+# Falls back to epoch timestamp if not in a git repo.
+BUILD=$(git rev-list --count HEAD 2>/dev/null || echo "$(date +%s)")
+
+# Git short hash for display in About panel (falls back to "dev").
+GITHASH=$(git rev-parse --short HEAD 2>/dev/null || echo "dev")
+
+echo "▸ Version: $VERSION (build $BUILD, $GITHASH)"
 
 # Icon (in build/ — not part of the signature)
 # make-icon.sh won't overwrite existing PNG (preserves custom icons).
@@ -60,7 +68,9 @@ cat > "$STAGE/app/Contents/Info.plist" <<PLIST
     <key>CFBundleShortVersionString</key>
         <string>$VERSION</string>
     <key>CFBundleVersion</key>
-        <string>$VERSION</string>
+        <string>$BUILD</string>
+    <key>GitHash</key>
+        <string>$GITHASH</string>
     <key>CFBundleIconFile</key>
         <string>AliSwitcher</string>
     <key>LSMinimumSystemVersion</key>

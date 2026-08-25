@@ -3,6 +3,11 @@
 All notable changes to AliSwitcher are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/), dates in ISO 8601.
 
+## [Unreleased]
+
+### Fixed
+- **Backspace during conversion window** — when user pressed Backspace during `isReplacing` (0.1–0.8s conversion window) with empty `pendingCharacters` buffer, the key was silently discarded. Now: backspaces are queued in `pendingBackspaces` counter, replayed after conversion completes. User's backspace press is delayed ~0.3s but no longer lost.
+
 ## [1.2.0] — 2026-08-24
 
 ### Added

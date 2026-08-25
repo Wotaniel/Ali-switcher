@@ -78,6 +78,13 @@ final class SwitcherState {
     /// typists' keystrokes land in wrong positions.
     var pendingCharacters = ""
 
+    /// Backspaces pressed during replacement (isReplacing) with empty
+    /// pendingCharacters. Instead of losing the key, we queue it and
+    /// replay after the replacement completes. Without this, pressing
+    /// backspace during a conversion (~0.3s window) feels like the key
+    /// is dead — nothing happens, the key is silently swallowed.
+    var pendingBackspaces = 0
+
     // MARK: - Settings (loaded from UserDefaults)
 
     /// Auto-learn: if user undoes an auto-conversion, add the word to

@@ -250,6 +250,7 @@ final class Switcher {
                 state.isReplacing = false
                 state.busy = false
                 state.pendingCharacters = ""
+                state.pendingBackspaces = 0
                 state.generation &+= 1  // BUG #4 fix: invalidate in-flight callbacks
             }
         }
@@ -279,13 +280,17 @@ final class Switcher {
                         if !state.pendingCharacters.isEmpty {
                             state.pendingCharacters.removeLast()
                         } else {
-                            log("⚠  backspace swallowed during isReplacing — buffer empty, key LOST")
+                            // Queue the backspace instead of losing it.
+                            // It will be replayed after the conversion completes.
+                            state.pendingBackspaces += 1
+                            log("backspace queued during isReplacing (total: " + String(state.pendingBackspaces) + ")")
                         }
-                        return nil  // swallow backspace — adjusted in buffer
+                        return nil  // swallow backspace — replayed after
                     case .reset:
                         // Enter, Tab, arrows, Home/End — let them through.
                         // Blocking navigation keys makes the keyboard feel dead.
                         state.pendingCharacters = ""
+                        state.pendingBackspaces = 0
                         state.generation &+= 1  // BUG #5 fix: invalidate stale completion
                     case .ignore:
                         // Escape, function keys, Cmd combos — let them through.
@@ -375,17 +380,31 @@ final class Switcher {
         event.getIntegerValueField(.eventSourceUnixProcessID) == Int64(getpid())
     }
 
-    /// Replays characters that were typed during replacement (isReplacing).
-    /// They were buffered to prevent cursor displacement during backspace+retype.
+    /// Replays characters and backspaces that were queued during replacement
+    /// (isReplacing). Text is typed first (pendingCharacters), then backspaces
+    /// are sent (pendingBackspaces). Without this, pressing backspace during a
+    /// conversion (~0.3s window) felt like the key was dead — swallowed and lost.
     private func replayPendingKeystrokes() {
-        guard !state.pendingCharacters.isEmpty else { return }
         let text = state.pendingCharacters
         state.pendingCharacters = ""
-        log("replay: «\(redact(text))» (\(text.count) chars)")
-        let toRussian = Translit.isCyrillic(text.first!)
-        KeyEvents.replay(text, toRussian: toRussian) { [weak self] in
-            // Track in buffer so future auto-convert / manual switch sees them
-            self?.trackTypedAction(.text(text))
+        let backspaces = state.pendingBackspaces
+        state.pendingBackspaces = 0
+
+        guard !text.isEmpty || backspaces > 0 else { return }
+
+        if !text.isEmpty {
+            log("replay: " + redact(text) + " (" + String(text.count) + " chars), " + String(backspaces) + " backspace(s)")
+            let toRussian = Translit.isCyrillic(text.first!)
+            KeyEvents.replay(text, toRussian: toRussian) { [weak self] in
+                // Track in buffer so future auto-convert / manual switch sees them
+                self?.trackTypedAction(.text(text))
+                if backspaces > 0 {
+                    KeyEvents.backspace(count: backspaces) { }
+                }
+            }
+        } else {
+            log("replay: " + String(backspaces) + " backspace(s)")
+            KeyEvents.backspace(count: backspaces) { }
         }
     }
 

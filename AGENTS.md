@@ -222,3 +222,6 @@ Before making ANY change, read this section:
 12. **Typographic quotes**: `Translit.convert()` normalizes `\u201C`/`\u201D` → `"` and `\u2018`/`\u2019` → `'` before map lookup.
 13. **After ANY code change**: `./build.sh && ./make-dmg.sh` — rebuild both. The DMG goes stale.
 14. **Communicate in Russian** if the user writes in Russian. English if English.
+15. **`isWordLatin`** must find the first LETTER character (skip quotes/punctuation), not just check `word.first`. Otherwise `"nj` or `,tpdjpdhfnyjt` won't convert.
+16. **`,` and `.`** map to `б` and `ю` on ЙЦУКЕН. They're in `boundaries` set, but `parseBufferSegments` must keep them INSIDE words when between/before letters (e.g. `djj,ot` = `вообще`). Trailing comma/period still = boundary.
+17. **`isReplacingTimeout` is adaptive** (not fixed 1.5s). `computeIsReplacingTimeout(deleteCount:textLength:)` scales with conversion size. Large conversions (96 backspaces + 90 chars) need ~2.2s, small ones stay at 1.5s.

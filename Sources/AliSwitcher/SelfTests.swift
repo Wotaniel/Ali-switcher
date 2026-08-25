@@ -889,6 +889,83 @@ enum SelfTests {
         check("plan: «Ghbdtn Dsgtq cfv» (manual) → «Привет Выпей сам»", p40c?.convertedText == "Привет Выпей сам")
         check("plan: «Ghbdtn Dsgtq cfv» → wordCount 3", p40c?.wordCount == 3)
 
+        // --- Scenario 41: isWordLatin skips non-letter prefix ---
+        // Words starting with non-letter chars (quotes, punctuation) should
+        // still be classified by their first LETTER, not the non-letter.
+        check("isWordLatin: «\\\"nj» → true (skip quote, find 'n')",
+              AutoSwitcher.isWordLatin("\"nj") == true)
+        check("isWordLatin: «\\\"это» → false (skip quote, find Cyrillic)",
+              AutoSwitcher.isWordLatin("\"это") == false)
+        check("isWordLatin: «,tpdjpdhfnyjt» → true (skip comma, find 't')",
+              AutoSwitcher.isWordLatin(",tpdjpdhfnyjt") == true)
+        check("isWordLatin: «abc» → true (no prefix)",
+              AutoSwitcher.isWordLatin("abc") == true)
+        check("isWordLatin: «123» → false (no letters)",
+              AutoSwitcher.isWordLatin("123") == false)
+        check("isWordLatin: «\"» → false (only non-letter)",
+              AutoSwitcher.isWordLatin("\"") == false)
+
+        // --- Scenario 42: parseBufferSegments with comma/period between letters ---
+        // On ЙЦУКЕН, comma = б, period = ю. When between letters (e.g. "djj,ot")
+        // they should NOT be treated as word boundaries — they're part of the word.
+        // But when followed by a boundary (e.g. "ghbdtn, vbh"), comma IS a boundary.
+        let segs42a = AutoSwitcher.parseBufferSegments("djj,ot")
+        check("segment: «djj,ot» → 1 segment (comma between letters)",
+              segs42a.count == 1)
+        check("segment: «djj,ot» → word «djj,ot»",
+              segs42a.first?.word == "djj,ot")
+
+        // Leading comma before letters: ",tpdjpdhfnyjt" = безвозвратное
+        let segs42b = AutoSwitcher.parseBufferSegments(",tpdjpdhfnyjt")
+        check("segment: «,tpdjpdhfnyjt» → 1 segment (leading comma before letters)",
+              segs42b.count == 1)
+        check("segment: «,tpdjpdhfnyjt» → word «,tpdjpdhfnyjt»",
+              segs42b.first?.word == ",tpdjpdhfnyjt")
+
+        // Trailing comma: "ghbdtn," → comma is boundary (followed by nothing/end)
+        let segs42c = AutoSwitcher.parseBufferSegments("ghbdtn,")
+        check("segment: «ghbdtn,» → 1 segment, comma in gap",
+              segs42c.count == 1)
+        check("segment: «ghbdtn,» → word «ghbdtn» (no trailing comma)",
+              segs42c.first?.word == "ghbdtn")
+        check("segment: «ghbdtn,» → gap «,»",
+              segs42c.first?.gap == ",")
+
+        // Comma + space: "ghbdtn, vbh" → comma is boundary (followed by space)
+        let segs42d = AutoSwitcher.parseBufferSegments("ghbdtn, vbh")
+        check("segment: «ghbdtn, vbh» → 2 segments",
+              segs42d.count == 2)
+        check("segment: «ghbdtn, vbh» → word[0] «ghbdtn»",
+              segs42d[0].word == "ghbdtn")
+        check("segment: «ghbdtn, vbh» → word[1] «vbh»",
+              segs42d[1].word == "vbh")
+
+        // Full conversion: "djj,ot yfabu" → "вообще нафиг"
+        let p42e = AutoSwitcher.findConversionRange(in: "djj,ot yfabu", isManual: true)
+        check("plan: «djj,ot yfabu» (manual) → «вообще нафиг»",
+              p42e?.convertedText == "вообще нафиг")
+        check("plan: «djj,ot yfabu» → wordCount 2", p42e?.wordCount == 2)
+
+        // Full conversion: leading comma word = безвозвратное
+        let p42f = AutoSwitcher.findConversionRange(in: ",tpdjpdhfnyjt yfabu", isManual: true)
+        check("plan: «,tpdjpdhfnyjt yfabu» (manual) → «безвозвратное нафиг»",
+              p42f?.convertedText == "безвозвратное нафиг")
+
+        // --- Scenario 43: Adaptive isReplacingTimeout ---
+        // Small conversions: 1.5s minimum (4x safety margin for ~0.4s work)
+        check("timeout: 5 del + 5 chars → 1.5s (minimum)",
+              computeIsReplacingTimeout(deleteCount: 5, textLength: 5) == 1.5)
+        check("timeout: 0 del + 0 chars → 1.5s (minimum)",
+              computeIsReplacingTimeout(deleteCount: 0, textLength: 0) == 1.5)
+        // Large conversion: 96 backspaces + 90 chars → >1.5s
+        let t43c = computeIsReplacingTimeout(deleteCount: 96, textLength: 90)
+        check("timeout: 96 del + 90 chars → >1.5s (adaptive)",
+              t43c > 1.5)
+        check("timeout: 96 del + 90 chars → ≥2.2s (covers ~1.67s work)",
+              t43c >= 2.2)
+        check("timeout: 96 del + 90 chars → <3.5s (not excessive)",
+              t43c < 3.5)
+
         // Restore state
         AutoSwitcher.enWords = savedEN
         AutoSwitcher.ruWords = savedRU

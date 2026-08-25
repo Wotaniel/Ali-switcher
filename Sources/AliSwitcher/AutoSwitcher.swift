@@ -185,13 +185,37 @@ enum AutoSwitcher {
             // Skip leading boundary chars.
             var wordStart = i
             while wordStart < buffer.endIndex, isBoundary(buffer[wordStart]) {
+                // Allow leading ,/. if followed by a letter — they map to
+                // б/ю on ЙЦУКЕН, so ",tpdjpdhfnyjt" should be one word
+                // (= безвозвратное), not a comma + word.
+                let ch = buffer[wordStart]
+                if ch == "," || ch == "." {
+                    let nextIdx = buffer.index(after: wordStart)
+                    if nextIdx < buffer.endIndex, !isBoundary(buffer[nextIdx]) {
+                        break  // keep ,/. as part of the word
+                    }
+                }
                 wordStart = buffer.index(after: wordStart)
             }
             guard wordStart < buffer.endIndex else { break }
 
-            // Find the word end (next boundary).
+            // Find the word end (next boundary). Allow ,/. inside words
+            // when followed by a letter (e.g. "djj,ot" = вообще).
+            // But stop at ,/. followed by a boundary (e.g. "ghbdtn, vbh"
+            // — comma is punctuation, not part of word).
             var wordEnd = wordStart
-            while wordEnd < buffer.endIndex, !isBoundary(buffer[wordEnd]) {
+            while wordEnd < buffer.endIndex {
+                let ch = buffer[wordEnd]
+                if isBoundary(ch) {
+                    if ch == "," || ch == "." {
+                        let nextIdx = buffer.index(after: wordEnd)
+                        if nextIdx < buffer.endIndex, !isBoundary(buffer[nextIdx]) {
+                            wordEnd = nextIdx
+                            continue
+                        }
+                    }
+                    break
+                }
                 wordEnd = buffer.index(after: wordEnd)
             }
             let word = String(buffer[wordStart..<wordEnd])
@@ -433,8 +457,11 @@ enum AutoSwitcher {
 
     /// Is the word Latin (English layout)? Direction is implicit:
     /// Latin word → toCyrillic; Cyrillic word → toLatin.
+    /// Skips non-letter prefix chars (e.g. quotes, punctuation) to find
+    /// the actual script of the word. Without this, `"nj` would return
+    /// false ("`"` is not a letter) and break the retro walk.
     static func isWordLatin(_ word: String) -> Bool {
-        guard let first = word.first, first.isLetter else { return false }
+        guard let first = word.first(where: { $0.isLetter }) else { return false }
         return !Translit.isCyrillic(first)
     }
 

@@ -53,6 +53,18 @@ enum Timing {
     static let clipboardRestore: TimeInterval = 0.4
 }
 
+/// Computes an adaptive isReplacing timeout based on the conversion size.
+/// Small conversions use the 1.5s minimum. Large conversions (many
+/// backspaces + long text) get proportional headroom.
+/// Formula: max(1.5s, expectedDuration + 0.5s margin)
+/// where expectedDuration = backspaces * backspaceDelay + chars * typeDelay + layoutSwitchDelay
+func computeIsReplacingTimeout(deleteCount: Int, textLength: Int) -> CFTimeInterval {
+    let expected = Double(deleteCount) * Timing.backspaceDelay
+                 + Double(textLength) * Timing.typeDelay
+                 + Timing.layoutSwitchDelay
+    return max(SwitcherState.minIsReplacingTimeout, expected + 0.5)
+}
+
 // MARK: - Global state
 
 var currentTap: CFMachPort?
@@ -245,7 +257,7 @@ final class Switcher {
         // This prevents the keyboard from being permanently blocked.
         if state.isReplacing {
             let now = CFAbsoluteTimeGetCurrent()
-            if now - state.isReplacingSince > SwitcherState.isReplacingTimeout {
+            if now - state.isReplacingSince > state.isReplacingTimeout {
                 log("⚠  isReplacing stuck for \(Int(now - state.isReplacingSince))s — force reset")
                 state.isReplacing = false
                 state.busy = false
@@ -483,6 +495,8 @@ final class Switcher {
         log("auto: buffer=«\(redact(state.typedBuffer))» → «\(redact(decision.convertedText))»+\(boundaryChar) (dir=\(toRussian ? "EN→RU" : "RU→EN"), \(decision.wordCount) words, del \(decision.deleteCount))")
 
         state.busy = true
+        state.isReplacingTimeout = computeIsReplacingTimeout(
+            deleteCount: decision.deleteCount, textLength: fullConvertedText.count)
         state.isReplacing = true; state.isReplacingSince = CFAbsoluteTimeGetCurrent()
         let gen = state.generation  // BUG #4/#5: capture for async callback validation
         guard LayoutSwitch.select(toRussian: toRussian) else {
@@ -540,6 +554,8 @@ final class Switcher {
         if state.autoLearnExceptions {
             learnException(info.triggerWord)
         }
+        state.isReplacingTimeout = computeIsReplacingTimeout(
+            deleteCount: info.backspaceCount, textLength: info.original.count)
         state.isReplacing = true; state.isReplacingSince = CFAbsoluteTimeGetCurrent()
         let gen = state.generation  // BUG #4/#5: capture for async callback validation
         state.typedBuffer = ""
@@ -636,6 +652,7 @@ final class Switcher {
     /// If there is no selection or nothing to convert — toggles the layout.
     private func convertSelectionViaClipboard() {
         guard !state.isReplacing else { state.busy = false; return }
+        state.isReplacingTimeout = SwitcherState.minIsReplacingTimeout  // clipboard: unknown size
         state.isReplacing = true; state.isReplacingSince = CFAbsoluteTimeGetCurrent()
         let gen = state.generation  // BUG #4/#5: capture for async callback validation
 
@@ -785,6 +802,8 @@ final class Switcher {
             state.busy = false
             return
         }
+        state.isReplacingTimeout = computeIsReplacingTimeout(
+            deleteCount: deleteCount, textLength: text.count)
         state.isReplacing = true; state.isReplacingSince = CFAbsoluteTimeGetCurrent()
         let gen = state.generation  // BUG #4/#5: capture for async callback validation
         KeyEvents.backspace(count: deleteCount) { [weak self] in
@@ -810,6 +829,8 @@ final class Switcher {
     /// and can't be typed in a single layout.
     private func replaceByClipboard(_ text: String, deleteCount: Int) {
         guard !state.isReplacing else { state.busy = false; return }
+        state.isReplacingTimeout = computeIsReplacingTimeout(
+            deleteCount: deleteCount, textLength: text.count)
         state.isReplacing = true; state.isReplacingSince = CFAbsoluteTimeGetCurrent()
         let gen = state.generation  // BUG #4/#5: capture for async callback validation
         let saved = Clipboard.snapshot()

@@ -37,9 +37,13 @@ final class SwitcherState {
 
     /// Safety timeout: if isReplacing is true for longer than this, force-reset.
     /// Prevents keyboard from being permanently stuck if a completion never fires.
-    /// Conversions typically take ~0.4s; 1.5s gives a 4x safety margin.
+    /// Adaptive: set dynamically based on conversion size (deleteCount + textLength).
+    /// Small conversions: 1.5s (4x margin over typical 0.4s).
+    /// Large conversions (17 words / 96+90 chars): ~2.2s — needed because
+    /// 96 backspaces @ 0.008s + 90 chars @ 0.01s = 1.67s bare minimum.
     var isReplacingSince: CFTimeInterval = 0
-    static let isReplacingTimeout: CFTimeInterval = 1.5
+    static let minIsReplacingTimeout: CFTimeInterval = 1.5
+    var isReplacingTimeout: CFTimeInterval = minIsReplacingTimeout
 
     /// Generation token for async callback invalidation (BUG #4/#5 fix).
     /// Incremented on every invalidation event (timeout force-reset, .reset

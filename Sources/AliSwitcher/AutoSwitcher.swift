@@ -48,7 +48,7 @@ enum AutoSwitcher {
     private static func loadBuiltinWords(_ name: String) -> Set<String> {
         guard let url = Bundle.main.url(forResource: name, withExtension: "txt"),
               let content = try? String(contentsOf: url, encoding: .utf8) else {
-            log("⚠  builtin: \(name).txt not found — using empty set")
+            log(.warn, "builtin: \(name).txt not found — using empty set")
             return []
         }
         let words = Set(content.split(separator: "\n")
@@ -280,15 +280,15 @@ enum AutoSwitcher {
         let direction = lastResult.direction
         let lastIsLatin = isWordLatin(lastSeg.word)
 
-        log("findRange[\(mode)]: buffer=«\(redact(text))» segments=\(segments.map { "\($0.word)" })")
-        log("findRange[\(mode)]: last=«\(lastSeg.word)»→«\(lastResult.converted)» dir=\(direction == .toCyrillic ? "EN→RU" : "RU→EN") latin=\(lastIsLatin)")
+        log(.debug, "findRange[\(mode)]: buffer=«\(redact(text))» segments=\(segments.map { "\($0.word)" })")
+        log(.debug, "findRange[\(mode)]: last=«\(lastSeg.word)»→«\(lastResult.converted)» dir=\(direction == .toCyrillic ? "EN→RU" : "RU→EN") latin=\(lastIsLatin)")
 
         // For auto-convert: trigger word must pass shouldConvert checks.
         // (builtins, exceptions, spell-checker, structural filters).
         // For manual: last word always converts — no dictionary checks.
         if !isManual {
             guard shouldConvert(lastSeg.word, isRetroactive: false) != nil else {
-                log("findRange[\(mode)]: last word «\(lastSeg.word)» failed shouldConvert → nil")
+                log(.debug, "findRange[\(mode)]: last word «\(lastSeg.word)» failed shouldConvert → nil")
                 return nil
             }
         }
@@ -312,7 +312,7 @@ enum AutoSwitcher {
             // words from a different "wrong layout" in one pass).
             let prevIsLatin = isWordLatin(prevSeg.word)
             if prevIsLatin != lastIsLatin {
-                log("findRange[\(mode)]: retro «\(prevSeg.word)» → stop (different script, latin=\(prevIsLatin))")
+                log(.debug, "findRange[\(mode)]: retro «\(prevSeg.word)» → stop (different script, latin=\(prevIsLatin))")
                 break
             }
 
@@ -320,7 +320,7 @@ enum AutoSwitcher {
             guard let prevResult = Translit.convert(prevSeg.word),
                   prevResult.direction == direction,
                   prevResult.converted != prevSeg.word else {
-                log("findRange[\(mode)]: retro «\(prevSeg.word)» → stop (Translit fail / same direction / no change)")
+                log(.debug, "findRange[\(mode)]: retro «\(prevSeg.word)» → stop (Translit fail / same direction / no change)")
                 break
             }
 
@@ -346,7 +346,7 @@ enum AutoSwitcher {
                     inSpellDocumentWithTag: 0, wordCount: nil
                 ).location != NSNotFound
                 if !origMisspelled {
-                    log("findRange[\(mode)]: retro «\(prevSeg.word)» → stop (valid in \(origLang))")
+                    log(.debug, "findRange[\(mode)]: retro «\(prevSeg.word)» → stop (valid in \(origLang))")
                     break
                 }
 
@@ -359,7 +359,7 @@ enum AutoSwitcher {
                         inSpellDocumentWithTag: 0, wordCount: nil
                     ).location == NSNotFound
                     if !convValid, !matchesDomainPattern(prevResult.converted) {
-                        log("findRange[\(mode)]: retro «\(prevSeg.word)» → stop (converted «\(prevResult.converted)» invalid in \(convLang))")
+                        log(.debug, "findRange[\(mode)]: retro «\(prevSeg.word)» → stop (converted «\(prevResult.converted)» invalid in \(convLang))")
                         break
                     }
                 }
@@ -368,11 +368,11 @@ enum AutoSwitcher {
             // Exceptions block (user undid this word before).
             // Manual mode: user explicitly wants conversion — ignore exceptions.
             if !isManual, isLearnedException(prevSeg.word) {
-                log("findRange[\(mode)]: retro «\(prevSeg.word)» → stop (learned exception)")
+                log(.debug, "findRange[\(mode)]: retro «\(prevSeg.word)» → stop (learned exception)")
                 break
             }
 
-            log("findRange[\(mode)]: retro «\(prevSeg.word)» → «\(prevResult.converted)» ✓")
+            log(.debug, "findRange[\(mode)]: retro «\(prevSeg.word)» → «\(prevResult.converted)» ✓")
             convertedText = prevResult.converted + gap + convertedText
             wordIndex -= 1
         }
@@ -399,7 +399,7 @@ enum AutoSwitcher {
         let lastGap = lastSeg.gap
         let wordCount = segments.count - wordIndex - 1
 
-        log("findRange[\(mode)]: RESULT prefix=«\(redact(prefix))» orig=«\(redact(originalText))» conv=«\(redact(convertedText))\" gap=«\(redact(lastGap))» words=\(wordCount)")
+        log(.debug, "findRange[\(mode)]: RESULT prefix=«\(redact(prefix))» orig=«\(redact(originalText))» conv=«\(redact(convertedText))» gap=«\(redact(lastGap))» words=\(wordCount)")
 
         return ConversionPlan(
             prefix: prefix,

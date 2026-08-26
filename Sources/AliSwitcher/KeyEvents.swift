@@ -149,7 +149,7 @@ enum KeyEvents {
         if let (keyCode, shift) = qwerty[source] {
             post(keyCode: keyCode, flags: shift ? [.maskShift] : [])
         } else {
-            log("⚠  typeNext: cannot type «\(ch)» (source «\(source)» not in qwerty map)")
+            log(.warn, "typeNext: cannot type «\(ch)» (source «\(source)» not in qwerty map)")
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + Timing.typeDelay) {
             typeNext(chars, index: index + 1, toRussian: toRussian, completion: completion)

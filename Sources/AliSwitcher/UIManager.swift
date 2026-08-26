@@ -261,7 +261,7 @@ final class UIManager: NSObject, NSWindowDelegate {
                     showModal(alert)
                 }
             } catch {
-                log("autostart register error: \(error)")
+                log(.warn, "autostart register error: \(error)")
             }
         }
         autostartItem?.state = (SMAppService.mainApp.status == .enabled) ? .on : .off

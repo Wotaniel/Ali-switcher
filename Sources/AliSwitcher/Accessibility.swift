@@ -4,14 +4,6 @@ import ApplicationServices
 /// Accessibility API: reading selected text in the frontmost app.
 enum Accessibility {
 
-    static var isTrusted: Bool { AXIsProcessTrusted() }
-
-    /// Silent permission check (no system dialog — our own panel explains everything).
-    @discardableResult
-    static func requestPermissionIfNeeded() -> Bool {
-        AXIsProcessTrusted()
-    }
-
     /// The element that currently holds the caret (in the frontmost app).
     static func focusedElement() -> AXUIElement? {
         let systemWide = AXUIElementCreateSystemWide()

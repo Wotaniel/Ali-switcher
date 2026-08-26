@@ -203,8 +203,8 @@ final class UIManager: NSObject, NSWindowDelegate {
 
     /// Updates the permission status rows in the menu (red/green dot).
     func updatePermissionStatus() {
-        let ax = AXIsProcessTrusted()
-        let listen = CGPreflightListenEventAccess()
+        let ax = Permissions.accessibilityGranted
+        let listen = Permissions.inputMonitoringGranted
         a11yStatusItem?.title = "\(ax ? "🟢" : "🔴") Accessibility"
         listenStatusItem?.title = "\(listen ? "🟢" : "🔴") Input Monitoring"
         statusStateItem?.title = (ax && listen)
@@ -232,16 +232,11 @@ final class UIManager: NSObject, NSWindowDelegate {
     // MARK: - Permission settings
 
     @objc private func openAccessibilitySettings() {
-        openPrivacyPane("Privacy_Accessibility")
+        Permissions.openAccessibilitySettings()
     }
 
     @objc private func openInputMonitoringSettings() {
-        openPrivacyPane("Privacy_ListenEvent")
-    }
-
-    private func openPrivacyPane(_ pane: String) {
-        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") else { return }
-        NSWorkspace.shared.open(url)
+        Permissions.openInputMonitoringSettings()
     }
 
     // MARK: - Launch at Login

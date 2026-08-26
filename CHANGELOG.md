@@ -7,6 +7,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), dates in ISO 86
 
 ### Added
 - **Logger with levels and rotation** — new `Logger.swift` (`LogLevel` enum: `.debug`/`.info`/`.warn`/`.error`). Log path moved from `/tmp/AliSwitcher.log` to `~/Library/Logs/AliSwitcher.log` (survives reboot). Rotation at 1 MB, 3 files max. Level configurable via UserDefaults: `defaults write com.aliswitcher.AliSwitcher logLevel -int 0` (debug). Default: `.info`. Existing `log("msg")` calls work unchanged (default `.info`); verbose calls (findRange, convert details, replay, isReplacing START/END) moved to `.debug`; warnings (event tap fail, isReplacing stuck, no target layout, etc.) moved to `.warn`.
+- **`Permissions.swift`** — centralized permission checks (`accessibilityGranted`, `inputMonitoringGranted`, `allGranted`) and "open System Settings" actions. Previously scattered across `Accessibility.swift`, `UIManager.swift`, and `main.swift`. UIManager's `@objc` methods are now thin wrappers. `Accessibility.swift` no longer has `isTrusted`/`requestPermissionIfNeeded`.
 
 ### Fixed
 - **Backspace during conversion window** — when user pressed Backspace during `isReplacing` (0.1–0.8s conversion window) with empty `pendingCharacters` buffer, the key was silently discarded. Now: backspaces are queued in `pendingBackspaces` counter, replayed after conversion completes. User's backspace press is delayed ~0.3s but no longer lost.

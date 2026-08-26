@@ -42,12 +42,13 @@ killall AliSwitcher; open /Applications/AliSwitcher.app   # Restart
 - Builds in `/tmp` to avoid iCloud FileProvider corrupting signatures
 - macOS 13+, uses swiftly toolchain if available
 
-## Source files (13)
+## Source files (14)
 
 | File | Responsibility |
 |---|---|
 | `main.swift` | App lifecycle, CGEventTap, handle(), performSwitch, tryAutoConvert, undoAutoConvert, convertTypedText, Timing enum |
 | `Logger.swift` | Logger with levels (.debug/.info/.warn/.error), file rotation (1MB, 3 files), path ~/Library/Logs/AliSwitcher.log, level via UserDefaults |
+| `Permissions.swift` | Permission status checks (accessibilityGranted, inputMonitoringGranted, allGranted), open System Settings panes |
 | `SwitcherState.swift` | Shared mutable state: busy, isReplacing, typedBuffer, generation (token), lastAutoConvertInfo, pendingCharacters |
 | `UIManager.swift` | Menu bar, status icon, permissions panel, word list editors, autostart prompt |
 | `AutoSwitcher.swift` | findConversionRange (unified), evaluateAutoConvert, shouldConvert, parseBufferSegments, builtin words (EN+RU), two word lists (enWords/ruWords), boundaries |

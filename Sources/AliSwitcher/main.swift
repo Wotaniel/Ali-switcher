@@ -164,13 +164,13 @@ final class Switcher {
 
         // 1. Silent permission check (no system dialogs — our own panel
         //    explains everything, see UIManager.showPermissionsGuide).
-        Accessibility.requestPermissionIfNeeded()
+        Permissions.requestIfNeeded()
 
         // 2. Event tap with retries: the app stays alive and waits for permissions.
         startEventTap()
 
         // 3. If permissions are missing — show the guide window.
-        if !AXIsProcessTrusted() || !CGPreflightListenEventAccess() {
+        if !Permissions.allGranted {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
                 self?.ui.showPermissionsGuide()
             }
@@ -206,8 +206,8 @@ final class Switcher {
             },
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
-            let ax = AXIsProcessTrusted()
-            let listen = CGPreflightListenEventAccess()
+            let ax = Permissions.accessibilityGranted
+            let listen = Permissions.inputMonitoringGranted
             log(.warn, "Event tap not created: Accessibility=\(ax), InputMonitoring=\(listen)")
             state.tapActive = false
             ui.updatePermissionStatus()

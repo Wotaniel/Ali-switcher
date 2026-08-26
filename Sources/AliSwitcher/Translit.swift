@@ -95,7 +95,25 @@ enum Translit {
             return nil
         }
 
-        let toLatin = cyrillic >= latin
+        // Direction: for pure-script words, convert to the OPPOSITE script
+        // (user typed in wrong layout → flip everything).
+        // For MIXED-script words, the first letter determines the "correct"
+        // layout — the user started typing in that layout, then a few chars
+        // leaked from the other layout. Convert the stray minority to match.
+        // Example: «любыхk» (5 Cyrillic + 1 Latin) → user typed in Russian,
+        // «k» leaked from English → convert «k» → «л», NOT «любых» → «k.,s[».
+        let toLatin: Bool
+        if cyrillic > 0 && latin > 0 {
+            // Mixed-script: first letter = the layout the user started in.
+            if let firstLetter = normalized.first(where: { $0.isLetter }) {
+                toLatin = !isCyrillic(firstLetter)
+            } else {
+                toLatin = cyrillic >= latin
+            }
+        } else {
+            // Pure-script: convert to the other script.
+            toLatin = cyrillic >= latin
+        }
         let map: [Character: Character] = toLatin ? ruToEn : enToRu
         let converted = String(normalized.map { map[$0] ?? $0 })
         let direction: SwitchDirection = toLatin ? .toLatin : .toCyrillic

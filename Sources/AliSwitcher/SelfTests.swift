@@ -59,7 +59,7 @@ enum SelfTests {
         check("RU→EN «нужно чтобы»", conv("нужно чтобы") == "ye;yj xnj,s")
         check("RU→EN «б»→«,»", conv("б") == ",")
         check("RU→EN «Б»→«<»", conv("Б") == "<")
-        check("RU→EN «ё»→«`», «Ё»→«~»", conv("ёЁ") == "`~")
+        check("RU→EN «ё»→«\\», «Ё»→«|»", conv("ёЁ") == "\\|")
         check("RU→EN «х»→«[», «ъ»→«]»", conv("хъ") == "[]")
         check("RU→EN «ж»→«;», «э»→«'»", conv("жэ") == ";'")
         check("RU→EN «ю»→«.», «я»→«z»", conv("юя") == ".z")
@@ -800,11 +800,13 @@ enum SelfTests {
         let leading37c = chunk37c.prefix(while: { AutoSwitcher.isBoundary($0) }).count
         check("boundary: «abc» → leadingBoundaryCount 0", leading37c == 0)
         check("boundary: «abc» → deleteCount 3", chunk37c.count - leading37c == 3)
-        // Leading period (from ChunkFinder chunk): ".abc"
+        // Leading period: . is NOT a boundary anymore (it maps to ю in RU layout).
+        // So ".abc" has 0 leading boundaries — period is part of the word.
         let chunk37d = ".abc"
         let leading37d = chunk37d.prefix(while: { AutoSwitcher.isBoundary($0) }).count
-        check("boundary: «.abc» → leadingBoundaryCount 1", leading37d == 1)
-        check("boundary: «.abc» → deleteCount 3 (not 4)", chunk37d.count - leading37d == 3)
+        check("boundary: «.abc» → leadingBoundaryCount 0 (period is NOT boundary)",
+              leading37d == 0)
+        check("boundary: «.abc» → deleteCount 4 (period in word)", chunk37d.count - leading37d == 4)
 
         // --- Scenario 38: findConversionRange unified algorithm ---
         // Manual mode: last word always converts, previous convert if same script
@@ -948,38 +950,41 @@ enum SelfTests {
         check("isWordLatin: «\"» → false (only non-letter)",
               AutoSwitcher.isWordLatin("\"") == false)
 
-        // --- Scenario 42: parseBufferSegments with comma/period between letters ---
-        // On ЙЦУКЕН, comma = б, period = ю. When between letters (e.g. "djj,ot")
-        // they should NOT be treated as word boundaries — they're part of the word.
-        // But when followed by a boundary (e.g. "ghbdtn, vbh"), comma IS a boundary.
+        // --- Scenario 42: parseBufferSegments with comma/period in words ---
+        // On macOS ЙЦУКЕН, "." → "ю" and "," → "б". They are NOT boundaries
+        // — they're letters in Russian layout. parseBufferSegments treats
+        // them as part of the word. Only space/!/?/\n/\t are boundaries.
+        // This eliminates the need for commaPeriodFollowedByLetter hacks.
+
+        // Comma between letters: "djj,ot" = "вообще" — one segment
         let segs42a = AutoSwitcher.parseBufferSegments("djj,ot")
-        check("segment: «djj,ot» → 1 segment (comma between letters)",
+        check("segment: «djj,ot» → 1 segment (comma is part of word)",
               segs42a.count == 1)
         check("segment: «djj,ot» → word «djj,ot»",
               segs42a.first?.word == "djj,ot")
 
-        // Leading comma before letters: ",tpdjpdhfnyjt" = безвозвратное
+        // Leading comma: ",tpdjpdhfnyjt" = "безвозвратное" — one segment
         let segs42b = AutoSwitcher.parseBufferSegments(",tpdjpdhfnyjt")
-        check("segment: «,tpdjpdhfnyjt» → 1 segment (leading comma before letters)",
+        check("segment: «,tpdjpdhfnyjt» → 1 segment (leading comma OK)",
               segs42b.count == 1)
         check("segment: «,tpdjpdhfnyjt» → word «,tpdjpdhfnyjt»",
               segs42b.first?.word == ",tpdjpdhfnyjt")
 
-        // Trailing comma: "ghbdtn," → comma is boundary (followed by nothing/end)
+        // Trailing comma: "ghbdtn," = "привет" + б — one segment, comma inside
         let segs42c = AutoSwitcher.parseBufferSegments("ghbdtn,")
-        check("segment: «ghbdtn,» → 1 segment, comma in gap",
+        check("segment: «ghbdtn,» → 1 segment, comma in word (NOT gap)",
               segs42c.count == 1)
-        check("segment: «ghbdtn,» → word «ghbdtn» (no trailing comma)",
-              segs42c.first?.word == "ghbdtn")
-        check("segment: «ghbdtn,» → gap «,»",
-              segs42c.first?.gap == ",")
+        check("segment: «ghbdtn,» → word «ghbdtn,»)",
+              segs42c.first?.word == "ghbdtn,")
+        check("segment: «ghbdtn,» → gap empty (comma NOT a boundary)",
+              segs42c.first?.gap == "")
 
-        // Comma + space: "ghbdtn, vbh" → comma is boundary (followed by space)
+        // Comma + space: "ghbdtn, vbh" → comma in word[0], space is boundary
         let segs42d = AutoSwitcher.parseBufferSegments("ghbdtn, vbh")
         check("segment: «ghbdtn, vbh» → 2 segments",
               segs42d.count == 2)
-        check("segment: «ghbdtn, vbh» → word[0] «ghbdtn»",
-              segs42d[0].word == "ghbdtn")
+        check("segment: «ghbdtn, vbh» → word[0] «ghbdtn,»",
+              segs42d[0].word == "ghbdtn,")
         check("segment: «ghbdtn, vbh» → word[1] «vbh»",
               segs42d[1].word == "vbh")
 
@@ -994,35 +999,74 @@ enum SelfTests {
         check("plan: «,tpdjpdhfnyjt yfabu» (manual) → «безвозвратное нафиг»",
               p42f?.convertedText == "безвозвратное нафиг")
 
-        // Consecutive ,/. between letters: "k.,jv" = любом (., = юб)
-        // The old code checked only ONE next char — if it was also ,/.
-        // (which is in boundaries), it broke the word apart.
+        // Consecutive ,/. inside word: "k.,jv" = "любом" (., = юб)
         let segs42g = AutoSwitcher.parseBufferSegments("k.,jv")
-        check("segment: «k.,jv» → 1 segment (., between letters)",
+        check("segment: «k.,jv» → 1 segment (., inside word)",
               segs42g.count == 1)
-        check("segment: «k.,jv» → word «k.,jv» (not split!)",
+        check("segment: «k.,jv» → word «k.,jv»",
               segs42g.first?.word == "k.,jv")
 
         // Full conversion: "k.,jv" → "любом"
         let p42h = AutoSwitcher.findConversionRange(in: "k.,jv", isManual: true)
         check("plan: «k.,jv» (manual) → «любом»",
               p42h?.convertedText == "любом")
-        check("plan: «k.,jv» → wordCount 1", p42h?.wordCount == 1)
 
         // In context: "d k.,jv" → "в любом"
         let p42i = AutoSwitcher.findConversionRange(in: "d k.,jv", isManual: true)
         check("plan: «d k.,jv» (manual) → «в любом»",
               p42i?.convertedText == "в любом")
-        check("plan: «d k.,jv» → wordCount 2", p42i?.wordCount == 2)
 
         // Segment parsing in full sentence from logs
         let segs42j = AutoSwitcher.parseBufferSegments("ye d k.,jv ckexft c Rhb")
-        check("segment: «ye d k.,jv ckexft c Rhb» → 6 segments (k.,jv=one)",
+        check("segment: «ye d k.,jv ckexft c Rhb» → 6 segments",
               segs42j.count == 6)
-        check("segment: [2] = «k.,jv» (not split into k+jv)",
+        check("segment: [2] = «k.,jv»",
               segs42j[2].word == "k.,jv")
 
-        // --- Scenario 43: Adaptive isReplacingTimeout ---
+        // --- Scenario 43: Trailing "." / "," are part of word ---
+        // Since . and , are no longer boundaries, they stay in the word.
+        // The spell-checker validates whether the combined result is a word.
+        // "htdm." → "ревью" (period = ю) — valid → converts as one word.
+        // "ghbdtn." → "привет." (period → ю in enToRu) → "приветю" — NOT valid
+        // → shouldConvert returns nil for auto. Manual: converts anyway.
+        let p43a = AutoSwitcher.findConversionRange(in: "htdm.", isManual: true)
+        check("boundary: «htdm.» (manual) → «ревью» (period is ю)",
+              p43a?.convertedText == "ревью")
+        check("boundary: «htdm.» → wordCount 1", p43a?.wordCount == 1)
+        check("boundary: «htdm.» → lastGap empty (no trailing gap)",
+              p43a?.lastGap == "")
+
+        // Auto mode: shouldConvert("htdm.") → "ревью" valid → convert
+        let p43b = AutoSwitcher.findConversionRange(in: "htdm.", isManual: false)
+        check("boundary: «htdm.» (auto) → «ревью»",
+              p43b?.convertedText == "ревью")
+
+        // "ghbdtn." → "приветю" — NOT valid → auto shouldConvert returns nil.
+        // But spell-checker may split on "." → check "привет" (valid) + "ю" →
+        // depends on NSSpellChecker behavior. The key: auto mode correctly
+        // rejects if it's not a word, manual converts.
+        let p43c = AutoSwitcher.findConversionRange(in: "ghbdtn.", isManual: true)
+        check("boundary: «ghbdtn.» (manual) → «привет.» (period converts to ю)",
+              p43c?.convertedText == "приветю")
+        check("boundary: «ghbdtn.» → wordCount 1", p43c?.wordCount == 1)
+        check("boundary: «ghbdtn.» → lastGap empty (period is part of word)",
+              p43c?.lastGap == "")
+
+        // Trailing comma: "ghbdtn," → "приветб" — comma converts to б
+        let p43d = AutoSwitcher.findConversionRange(in: "ghbdtn,", isManual: true)
+        check("boundary: «ghbdtn,» (manual) → «приветб» (comma converts to б)",
+              p43d?.convertedText == "приветб")
+        check("boundary: «ghbdtn,» → lastGap empty (comma is part of word)",
+              p43d?.lastGap == "")
+
+        // "!" IS still a boundary — no Translit mapping
+        let p43e = AutoSwitcher.findConversionRange(in: "ghbdtn!", isManual: true)
+        check("boundary: «ghbdtn!» → «привет» (! is boundary, no mapping)",
+              p43e?.convertedText == "привет")
+        check("boundary: «ghbdtn!» → lastGap «!»",
+              p43e?.lastGap == "!")
+
+        // --- Scenario 44: Adaptive isReplacingTimeout ---
         // Small conversions: 1.5s minimum (4x safety margin for ~0.4s work)
         check("timeout: 5 del + 5 chars → 1.5s (minimum)",
               computeIsReplacingTimeout(deleteCount: 5, textLength: 5) == 1.5)

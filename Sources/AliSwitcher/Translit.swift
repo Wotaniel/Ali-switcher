@@ -23,7 +23,9 @@ enum Translit {
         "я": "z", "ч": "x", "с": "c", "м": "v", "и": "b", "т": "n",
         "ь": "m", "б": ",", "ю": ".",
         // ё and symbols (Shift variants)
-        "ё": "`", "Ё": "~",
+        // On ISO Mac keyboards, ё/Ё are on the \ / | key (keyCode 42),
+        // not on the ` / ~ key (keyCode 50) like ANSI.
+        "ё": "\\", "Ё": "|",
         "Й": "Q", "Ц": "W", "У": "E", "К": "R", "Е": "T", "Н": "Y",
         "Г": "U", "Ш": "I", "Щ": "O", "З": "P", "Х": "{", "Ъ": "}",
         "Ф": "A", "Ы": "S", "В": "D", "А": "F", "П": "G", "Р": "H",

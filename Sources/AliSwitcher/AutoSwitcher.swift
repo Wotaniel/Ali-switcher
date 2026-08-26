@@ -59,13 +59,15 @@ enum AutoSwitcher {
     }
 
     /// Characters that mark word boundaries (trigger a check).
-    /// IMPORTANT: only "universal" punctuation — characters that are NOT
-    /// letters in ANY layout. For example, ";" is "ж" in the Russian layout,
-    /// so it must NOT be a boundary (otherwise "db;e" breaks into "db" + "e"
-    /// instead of being checked as one word → "вижу"). But "." IS a boundary
-    /// (it's "." in both layouts).
+    /// Only TRULY universal characters — same character in BOTH layouts:
+    ///   space, newline, tab, ! (Shift+1), ? (Shift+/), —, –, …
+    /// Characters like ".", ";" are NOT boundaries because on macOS ЙЦУКЕН:
+    ///   "." → "ю" (letter), "," → "б" (letter), ";" → "ж" (letter)
+    /// They can be part of a word (e.g. "htdm." = "ревью" — period is "ю").
+    /// The spell-checker validates whether a segment including these chars
+    /// is a real word.
     static let boundaries: Set<Character> = [
-        " ", ".", ",", "!", "?", "\n", "\t",
+        " ", "!", "?", "\n", "\t",
         "—", "–", "…",
     ]
 
@@ -175,25 +177,13 @@ enum AutoSwitcher {
     /// Example: "f e ghbdtn" → [("f", " "), ("e", " "), ("ghbdtn", "")]
     /// The gap is the boundary character(s) following each word.
     /// Pure function — no instance state, safe to call from tests.
-    /// When encountering ,/. (which are б/ю on ЙЦУКЕН), check if there's
-    /// a letter after a sequence of consecutive ,/. chars. If so, they're
-    /// part of the word (e.g. "k.,jv" = любом — . and , are ю and б).
-    /// Only returns true if a LETTER follows the ,/. sequence, not another
-    /// boundary char like space.
-    private static func commaPeriodFollowedByLetter(_ buffer: String, _ start: String.Index) -> Bool {
-        var idx = start
-        while idx < buffer.endIndex {
-            let ch = buffer[idx]
-            if ch == "," || ch == "." {
-                idx = buffer.index(after: idx)
-                continue
-            }
-            // Found a non-,/. char — is it a letter (non-boundary)?
-            return !isBoundary(ch)
-        }
-        return false  // end of string — no letter after ,/. sequence
-    }
-
+    ///
+    /// Boundaries are ONLY truly universal chars (space, !, ?, newline, tab).
+    /// Characters like ".", ",", ";" are NOT boundaries — on macOS ЙЦУКЕН
+    /// they map to letters (ю, б, ж). They stay inside words and the
+    /// spell-checker validates whether the whole segment is a real word.
+    /// Example: "htdm." → one segment "htdm." → Translit.convert → "ревью"
+    /// (where "." → "ю"). Spell-checker confirms "ревью" is valid → convert.
     static func parseBufferSegments(_ buffer: String) -> [(word: String, gap: String)] {
         guard !buffer.isEmpty else { return [] }
 
@@ -204,34 +194,13 @@ enum AutoSwitcher {
             // Skip leading boundary chars.
             var wordStart = i
             while wordStart < buffer.endIndex, isBoundary(buffer[wordStart]) {
-                // Allow leading ,/. if followed by a letter (directly or
-                // through more ,/. chars) — they map to б/ю on ЙЦУКЕН.
-                let ch = buffer[wordStart]
-                if ch == "," || ch == "." {
-                    if commaPeriodFollowedByLetter(buffer, wordStart) {
-                        break  // keep ,/. as part of the word
-                    }
-                }
                 wordStart = buffer.index(after: wordStart)
             }
             guard wordStart < buffer.endIndex else { break }
 
-            // Find the word end (next boundary). Allow ,/. inside words
-            // when followed by a letter (directly or through more ,/.).
-            // This handles "k.,jv" = любом (., are юб on ЙЦУКЕН).
-            // But stop at ,/. followed by a real boundary (space, etc.).
+            // Find the word end (next boundary char).
             var wordEnd = wordStart
-            while wordEnd < buffer.endIndex {
-                let ch = buffer[wordEnd]
-                if isBoundary(ch) {
-                    if ch == "," || ch == "." {
-                        if commaPeriodFollowedByLetter(buffer, wordEnd) {
-                            wordEnd = buffer.index(after: wordEnd)
-                            continue
-                        }
-                    }
-                    break
-                }
+            while wordEnd < buffer.endIndex, !isBoundary(buffer[wordEnd]) {
                 wordEnd = buffer.index(after: wordEnd)
             }
             let word = String(buffer[wordStart..<wordEnd])
@@ -307,9 +276,9 @@ enum AutoSwitcher {
               let lastResult = Translit.convert(lastSeg.word),
               lastResult.converted != lastSeg.word else { return nil }
 
+        let mode = isManual ? "manual" : "auto"
         let direction = lastResult.direction
         let lastIsLatin = isWordLatin(lastSeg.word)
-        let mode = isManual ? "manual" : "auto"
 
         log("findRange[\(mode)]: buffer=«\(redact(text))» segments=\(segments.map { "\($0.word)" })")
         log("findRange[\(mode)]: last=«\(lastSeg.word)»→«\(lastResult.converted)» dir=\(direction == .toCyrillic ? "EN→RU" : "RU→EN") latin=\(lastIsLatin)")

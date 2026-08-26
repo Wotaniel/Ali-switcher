@@ -183,9 +183,8 @@ Direction is **implicit in the word's script** (alphabet). Two simple `Set<Strin
 There is no force-convert mechanism. Only undo (exception) learns.
 
 **Built-in words** = safety net for common words NSSpellChecker may miss.
-→ Checked BEFORE learned words and spell-checker in `shouldConvert`.
-→ Skipped in retroactive mode (user typed wrong layout → even common words need conversion).
-→ Examples: English (the, is, a, I, he), Russian (что, она, юае, а, в).
+→ Checked BEFORE learned words and spell-checker in `shouldConvert` (trigger word only).
+→ In retroactive walk: **auto mode** — builtins go through spell-checker (`origMisspelled` stops at valid words like «это», «из», «by»). **Manual mode** — builtins bypass spell-checker (user explicitly asked to convert).
 
 **Deduplication — automatic via Set:**
 - `enWords` and `ruWords` are `Set<String>` — duplicates impossible by construction

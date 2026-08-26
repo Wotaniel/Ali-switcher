@@ -710,14 +710,16 @@ enum SelfTests {
         check("retro: «f» (single-char) → «а»",
               AutoSwitcher.shouldConvert("f", minLength: 1, isRetroactive: true)?.converted == "а")
 
-        // --- Scenario 31: retroactive walk — builtin bypasses spell-checker ---
+        // --- Scenario 31: retroactive walk — builtin words go through spell-checker ---
         // "by ghbdtn" + space → "ghbdtn" triggers, retroactive tries "by".
-        // "by" IS a builtin → bypasses spell-checker → converts to «ин».
-        // (Non-builtin valid words like "hello" still stop — see scenario 11.)
+        // "by" IS a builtin → spell-checker runs → origMisspelled=false (valid EN)
+        // → walk stops → only «ghbdtn» converts to «привет».
+        // Previously builtins bypassed spell-checker → "by" was incorrectly
+        // converted to «ин» (BUG: «это из сдд» → «'nj bp cll»).
         let d31 = AutoSwitcher.evaluateAutoConvert(buffer: "by ghbdtn", boundaryChar: " ")
-        check("integ: «by ghbdtn» → converts both (builtin bypass)", d31 != nil)
-        check("integ: «by ghbdtn» → «ин привет»", d31?.convertedText == "ин привет")
-        check("integ: «by ghbdtn» → wordCount 2", d31?.wordCount == 2)
+        check("integ: «by ghbdtn» → converts only «ghbdtn»", d31 != nil)
+        check("integ: «by ghbdtn» → «привет» (by is valid EN, stops)", d31?.convertedText == "привет")
+        check("integ: «by ghbdtn» → wordCount 1", d31?.wordCount == 1)
 
         // --- Scenario 32: Translit.convert on mixed buffer ---
         // convertTypedText now uses Translit.convert directly for last word
@@ -933,6 +935,25 @@ enum SelfTests {
         let p40c = AutoSwitcher.findConversionRange(in: "Ghbdtn Dsgtq cfv", isManual: true)
         check("plan: «Ghbdtn Dsgtq cfv» (manual) → «Привет Выпей сам»", p40c?.convertedText == "Привет Выпей сам")
         check("plan: «Ghbdtn Dsgtq cfv» → wordCount 3", p40c?.wordCount == 3)
+
+        // --- Scenario 40b: Builtin words in auto retro walk ---
+        // BUG: «это из сдд» + space → auto-convert converted ALL three words
+        // to English ('nj bp cll) instead of just «сдд» → «cll».
+        // Root cause: isBuiltinWord("это"/"из") = true → !isBuiltinWord = false
+        // → spell-checker block skipped entirely → no origMisspelled check →
+        // builtins converted without any validation.
+        // Fix: in auto mode, builtins go through spell-checker. «это» and «из»
+        // are valid Russian → origMisspelled=false → walk stops → only «сдд» converts.
+        let p40d = AutoSwitcher.findConversionRange(in: "это из сдд", isManual: false)
+        check("plan: «это из сдд» (auto) → convertedText «cll»", p40d?.convertedText == "cll")
+        check("plan: «это из сдд» → wordCount 1", p40d?.wordCount == 1)
+        check("plan: «это из сдд» → prefix «это из »", p40d?.prefix == "это из ")
+
+        // Same case in manual mode: builtins BYPASS spell-checker — all convert.
+        // User explicitly double-Shifted → no spell-checker for builtins.
+        let p40e = AutoSwitcher.findConversionRange(in: "это из сдд", isManual: true)
+        check("plan: «это из сдд» (manual) → «'nj bp cll»", p40e?.convertedText == "'nj bp cll")
+        check("plan: «это из сдд» (manual) → wordCount 3", p40e?.wordCount == 3)
 
         // --- Scenario 41: isWordLatin skips non-letter prefix ---
         // Words starting with non-letter chars (quotes, punctuation) should

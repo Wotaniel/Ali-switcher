@@ -324,12 +324,20 @@ enum AutoSwitcher {
                 break
             }
 
-            // Spell-checker for non-builtin words (≥2 chars).
-            // Skip for mixed-script words — NSSpellChecker can't reason about
-            // them (see hasMixedScript comment), and they're always wrong-layout.
-            // Skip for all-caps words — NSSpellChecker treats them as valid
-            // acronyms (HTML, JSON), but in manual mode the user may have typed
-            // them in the wrong layout (ЕРФТЛ → THANK). All-caps bypasses.
+            // Spell-checker (≥2 chars, not mixed-script, not all-caps).
+            //
+            // Builtin words: in AUTO mode, spell-checker RUNS — if the word is
+            // valid in its own language (origMisspelled=false), the walk stops.
+            // Previously builtins bypassed spell-checker entirely, which caused
+            // valid words like «это»/«из» to be converted alongside the trigger
+            // word (BUG: «это из сдд» → «'nj bp cll» instead of just «сдд»→«cll»).
+            // In MANUAL mode, builtins still bypass (user explicitly asked).
+            //
+            // Mixed-script words: skip spell-checker (NSSpellChecker can't
+            // reason about them) — they're always wrong-layout typos.
+            // All-caps words: skip spell-checker (NSSpellChecker treats them as
+            // valid acronyms like HTML/JSON), but in manual mode user may have
+            // typed them in wrong layout (ЕРФТЛ → THANK).
             //
             // origMisspelled (word is gibberish in own language) runs in BOTH
             // modes — otherwise valid words like «есть»/«термин» get converted
@@ -338,7 +346,7 @@ enum AutoSwitcher {
             // per AGENTS.md: "no convValid in manual".
             let prevLetters = prevSeg.word.filter { $0.isLetter }
             let prevAllCaps = prevLetters.count > 1 && prevLetters.allSatisfy({ $0.isUppercase })
-            if !prevAllCaps, !isBuiltinWord(prevSeg.word), prevSeg.word.count >= 2,
+            if !prevAllCaps, !(isBuiltinWord(prevSeg.word) && isManual), prevSeg.word.count >= 2,
                !hasMixedScript(prevSeg.word) {
                 let origMisspelled = checker.checkSpelling(
                     of: prevSeg.word, startingAt: 0,

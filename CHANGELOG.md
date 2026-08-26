@@ -16,6 +16,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), dates in ISO 86
 - **Force-reset on large conversions** — converting 17 words (96 backspaces + 90 chars ≈ 1.67s) exceeded the fixed 1.5s `isReplacingTimeout`, triggering force-reset and losing state. Now: timeout is adaptive — `max(1.5s, expectedDuration + 0.5s margin)` — scaling with delete count and text length.
 - **Consecutive comma/period splitting words** — `k.,jv` (=`любом`) was split at `.` because the next char `,` was also a boundary. The fix only checked ONE character ahead; now `commaPeriodFollowedByLetter` looks through the entire sequence of consecutive `,`/`.` chars to find a letter at the end.
 - **Log format string** — `RESULT` log line in `findConversionRange` had `\"` instead of `»` after `convertedText`, making the log output `conv=«orl"` instead of `conv=«orl»`.
+- **Builtin words converted in auto retro walk** — builtin words like «это», «из», «by» were converted alongside the trigger word because `!isBuiltinWord` skipped the spell-checker entirely. Example: «это из сдд» → «'nj bp cll» (3 words) instead of just «сдд» → «cll» (1 word). Now: in auto mode, builtins go through `origMisspelled` check — valid words stop the walk. Manual mode unchanged (builtins still bypass spell-checker).
 
 ## [1.2.0] — 2026-08-24
 

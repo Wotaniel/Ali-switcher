@@ -27,10 +27,10 @@ final class SwitcherState {
             guard isReplacing != oldValue else { return }
             if isReplacing {
                 isReplacingSince = CFAbsoluteTimeGetCurrent()
-                log("▸ isReplacing START")
+                log(.debug, "▸ isReplacing START")
             } else {
                 let elapsed = CFAbsoluteTimeGetCurrent() - isReplacingSince
-                log("▸ isReplacing END (\(String(format: "%.3f", elapsed))s)")
+                log(.debug, "▸ isReplacing END (\(String(format: "%.3f", elapsed))s)")
             }
         }
     }

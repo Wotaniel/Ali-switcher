@@ -77,19 +77,6 @@ func redact(_ s: String, limit: Int = 24) -> String {
     return s.prefix(limit) + "…"
 }
 
-func log(_ message: String) {
-    let line = "[\(String(format: "%.3f", Date().timeIntervalSince1970))] \(message)\n"
-    guard let data = line.data(using: .utf8) else { return }
-    let url = URL(fileURLWithPath: "/tmp/AliSwitcher.log")
-    if let handle = try? FileHandle(forWritingTo: url) {
-        defer { try? handle.close() }
-        handle.seekToEndOfFile()
-        handle.write(data)
-    } else {
-        try? data.write(to: url)
-    }
-}
-
 // MARK: - Word list persistence
 
 /// Loads two word lists from UserDefaults. Migrates old formats.
@@ -221,7 +208,7 @@ final class Switcher {
         ) else {
             let ax = AXIsProcessTrusted()
             let listen = CGPreflightListenEventAccess()
-            log("⚠  Event tap not created: Accessibility=\(ax), InputMonitoring=\(listen)")
+            log(.warn, "Event tap not created: Accessibility=\(ax), InputMonitoring=\(listen)")
             state.tapActive = false
             ui.updatePermissionStatus()
             ui.setToolTip("AliSwitcher: waiting for permissions (AX=\(ax), Listen=\(listen))")
@@ -258,7 +245,7 @@ final class Switcher {
         if state.isReplacing {
             let now = CFAbsoluteTimeGetCurrent()
             if now - state.isReplacingSince > state.isReplacingTimeout {
-                log("⚠  isReplacing stuck for \(Int(now - state.isReplacingSince))s — force reset")
+                log(.warn, "isReplacing stuck for \(Int(now - state.isReplacingSince))s — force reset")
                 state.isReplacing = false
                 state.busy = false
                 state.pendingCharacters = ""
@@ -295,7 +282,7 @@ final class Switcher {
                             // Queue the backspace instead of losing it.
                             // It will be replayed after the conversion completes.
                             state.pendingBackspaces += 1
-                            log("backspace queued during isReplacing (total: " + String(state.pendingBackspaces) + ")")
+                            log(.warn, "backspace queued during isReplacing (total: " + String(state.pendingBackspaces) + ")")
                         }
                         return nil  // swallow backspace — replayed after
                     case .reset:
@@ -405,7 +392,7 @@ final class Switcher {
         guard !text.isEmpty || backspaces > 0 else { return }
 
         if !text.isEmpty {
-            log("replay: " + redact(text) + " (" + String(text.count) + " chars), " + String(backspaces) + " backspace(s)")
+            log(.debug, "replay: " + redact(text) + " (" + String(text.count) + " chars), " + String(backspaces) + " backspace(s)")
             let toRussian = Translit.isCyrillic(text.first!)
             KeyEvents.replay(text, toRussian: toRussian) { [weak self] in
                 // Track in buffer so future auto-convert / manual switch sees them
@@ -415,7 +402,7 @@ final class Switcher {
                 }
             }
         } else {
-            log("replay: " + String(backspaces) + " backspace(s)")
+            log(.debug, "replay: " + String(backspaces) + " backspace(s)")
             KeyEvents.backspace(count: backspaces) { }
         }
     }
@@ -500,7 +487,7 @@ final class Switcher {
         state.isReplacing = true; state.isReplacingSince = CFAbsoluteTimeGetCurrent()
         let gen = state.generation  // BUG #4/#5: capture for async callback validation
         guard LayoutSwitch.select(toRussian: toRussian) else {
-            log("auto: no target layout — skipping")
+            log(.warn, "auto: no target layout — skipping")
             state.busy = false
             state.isReplacing = false
             return false
@@ -542,7 +529,7 @@ final class Switcher {
     /// backspaces the converted text, and retypes the original.
     private func undoAutoConvert(_ info: (original: String, backspaceCount: Int, undoToRussian: Bool, triggerWord: String)) {
         guard LayoutSwitch.select(toRussian: info.undoToRussian) else {
-            log("undo: no target layout — skipping")
+            log(.warn, "undo: no target layout — skipping")
             state.busy = false
             return
         }
@@ -596,7 +583,7 @@ final class Switcher {
 
         // Password field — do not touch at all.
         if state.secureField {
-            log("switch: secure field — skipping")
+            log(.debug, "switch: secure field — skipping")
             state.busy = false
             return
         }
@@ -608,11 +595,11 @@ final class Switcher {
         if let info = state.lastAutoConvertInfo {
             let hasNewText = state.typedBuffer.contains { !AutoSwitcher.isBoundary($0) }
             if hasNewText {
-                log("switch: new text after auto-convert → convert (skip undo)")
+                log(.debug, "switch: new text after auto-convert → convert (skip undo)")
                 state.lastAutoConvertInfo = nil
                 // Fall through to conversion below.
             } else {
-                log("undo: reverting auto-convert")
+                log(.debug, "undo: reverting auto-convert")
                 state.lastAutoConvertInfo = nil
                 undoAutoConvert(info)
                 return
@@ -629,7 +616,7 @@ final class Switcher {
         // 2) Toggle: undo last clipboard conversion (Cmd+Z).
         //    Only when there's no selection and no new typing.
         if state.lastWasSelectionConvert, state.typedBuffer.isEmpty {
-            log("toggle: undoing the last conversion (Cmd+Z)")
+            log(.debug, "toggle: undoing the last conversion (Cmd+Z)")
             state.lastWasSelectionConvert = false
             KeyEvents.undo()
             state.busy = false
@@ -675,7 +662,7 @@ final class Switcher {
                   let result = Translit.convert(text),
                   result.converted != text else {
                 // No selection or nothing to convert — just toggle the layout.
-                log("selection(copy): nothing to copy/convert → toggle")
+                log(.debug, "selection(copy): nothing to copy/convert → toggle")
                 self.state.typedBuffer = ""  // Clear stale buffer before toggle
                 Clipboard.restore(saved)
                 self.state.isReplacing = false
@@ -684,7 +671,7 @@ final class Switcher {
                 self.replayPendingKeystrokes()
                 return
             }
-            log("selection(copy): «\(redact(text))» → «\(redact(result.converted))»")
+            log(.debug, "selection(copy): «\(redact(text))» → «\(redact(result.converted))»")
 
             // Self-learning: if this selection conversion reverses any recent
             // auto-convert (user selected the auto-converted text and double-Shifts
@@ -735,23 +722,23 @@ final class Switcher {
         let ns: NSString
         if let real = realTextBeforeCaret(), !real.isEmpty {
             ns = real as NSString
-            log("convert: using real field text (\(ns.length) chars)")
+            log(.debug, "convert: using real field text (\(ns.length) chars)")
         } else {
             ns = state.typedBuffer as NSString
-            log("convert: using typing buffer (\(ns.length) chars)")
+            log(.debug, "convert: using typing buffer (\(ns.length) chars)")
         }
 
         let caret = ns.length
         let start = ChunkFinder.chunkStart(in: ns, before: caret)
         guard start < caret else {
-            log("convert: empty fragment → toggle")
+            log(.debug, "convert: empty fragment → toggle")
             LayoutSwitch.toggle()
             state.busy = false
             return
         }
         let chunk = ns.substring(with: NSRange(location: start, length: caret - start))
         guard !chunk.isEmpty else {
-            log("convert: empty chunk → toggle")
+            log(.debug, "convert: empty chunk → toggle")
             LayoutSwitch.toggle()
             state.busy = false
             return
@@ -759,7 +746,7 @@ final class Switcher {
 
         // Unified algorithm: determine what to convert (shared with auto-convert).
         guard let plan = AutoSwitcher.findConversionRange(in: chunk, isManual: true) else {
-            log("convert: «\(redact(chunk))» last word cannot be converted → toggle")
+            log(.debug, "convert: «\(redact(chunk))» last word cannot be converted → toggle")
             LayoutSwitch.toggle()
             state.busy = false
             return
@@ -770,7 +757,7 @@ final class Switcher {
         let toRussian = plan.direction == .toCyrillic
         let fullText = plan.convertedText + plan.lastGap
         let deleteCount = plan.deleteCount + plan.lastGap.count
-        log("convert: chunk=«\(redact(chunk))» prefix=«\(redact(plan.prefix))» orig=«\(redact(plan.originalText))» → conv=«\(redact(plan.convertedText))»+gap full=«\(redact(fullText))» (dir=\(toRussian ? "EN→RU" : "RU→EN"), \(plan.wordCount) words, del \(deleteCount))")
+        log(.debug, "convert: chunk=«\(redact(chunk))» prefix=«\(redact(plan.prefix))» orig=«\(redact(plan.originalText))» → conv=«\(redact(plan.convertedText))»+gap full=«\(redact(fullText))» (dir=\(toRussian ? "EN→RU" : "RU→EN"), \(plan.wordCount) words, del \(deleteCount))")
 
         // BUG #2 fix: universal typeability pre-check.
         if KeyEvents.isFullyTypeable(fullText, toRussian: toRussian) {
@@ -778,7 +765,7 @@ final class Switcher {
                               deleteCount: deleteCount,
                               toRussian: toRussian)
         } else {
-            log("convert: non-typeable chars → clipboard paste")
+            log(.debug, "convert: non-typeable chars → clipboard paste")
             replaceByClipboard(fullText, deleteCount: deleteCount)
         }
     }
@@ -798,7 +785,7 @@ final class Switcher {
     private func replaceByDeleting(_ text: String, deleteCount: Int, toRussian: Bool) {
         guard !state.isReplacing else { state.busy = false; return }
         guard LayoutSwitch.select(toRussian: toRussian) else {
-            log("replaceByDeleting: no target layout — leaving text as is")
+            log(.warn, "replaceByDeleting: no target layout — leaving text as is")
             state.busy = false
             return
         }

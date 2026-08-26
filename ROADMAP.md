@@ -45,7 +45,7 @@
 - [x] `AutoSwitcher.findConversionRange` — единый алгоритм для авто + ручной конвертации
 
 **Что осталось:**
-- [ ] Вынести permissions logic → `Permissions.swift` (вместе с `Accessibility.swift`)
+- [x] Вынести permissions logic → `Permissions.swift` (вместе с `Accessibility.swift`) ✅
 - [ ] `Switcher` → разбить на: `EventTapManager` (tap + callbacks), `TextConverter` (performSwitch + convert flow)
 - [ ] `main.swift` сейчас ~850 строк (было ~1350) — целевое значение ~300
 

@@ -175,6 +175,25 @@ enum AutoSwitcher {
     /// Example: "f e ghbdtn" → [("f", " "), ("e", " "), ("ghbdtn", "")]
     /// The gap is the boundary character(s) following each word.
     /// Pure function — no instance state, safe to call from tests.
+    /// When encountering ,/. (which are б/ю on ЙЦУКЕН), check if there's
+    /// a letter after a sequence of consecutive ,/. chars. If so, they're
+    /// part of the word (e.g. "k.,jv" = любом — . and , are ю and б).
+    /// Only returns true if a LETTER follows the ,/. sequence, not another
+    /// boundary char like space.
+    private static func commaPeriodFollowedByLetter(_ buffer: String, _ start: String.Index) -> Bool {
+        var idx = start
+        while idx < buffer.endIndex {
+            let ch = buffer[idx]
+            if ch == "," || ch == "." {
+                idx = buffer.index(after: idx)
+                continue
+            }
+            // Found a non-,/. char — is it a letter (non-boundary)?
+            return !isBoundary(ch)
+        }
+        return false  // end of string — no letter after ,/. sequence
+    }
+
     static func parseBufferSegments(_ buffer: String) -> [(word: String, gap: String)] {
         guard !buffer.isEmpty else { return [] }
 
@@ -185,13 +204,11 @@ enum AutoSwitcher {
             // Skip leading boundary chars.
             var wordStart = i
             while wordStart < buffer.endIndex, isBoundary(buffer[wordStart]) {
-                // Allow leading ,/. if followed by a letter — they map to
-                // б/ю on ЙЦУКЕН, so ",tpdjpdhfnyjt" should be one word
-                // (= безвозвратное), not a comma + word.
+                // Allow leading ,/. if followed by a letter (directly or
+                // through more ,/. chars) — they map to б/ю on ЙЦУКЕН.
                 let ch = buffer[wordStart]
                 if ch == "," || ch == "." {
-                    let nextIdx = buffer.index(after: wordStart)
-                    if nextIdx < buffer.endIndex, !isBoundary(buffer[nextIdx]) {
+                    if commaPeriodFollowedByLetter(buffer, wordStart) {
                         break  // keep ,/. as part of the word
                     }
                 }
@@ -200,17 +217,16 @@ enum AutoSwitcher {
             guard wordStart < buffer.endIndex else { break }
 
             // Find the word end (next boundary). Allow ,/. inside words
-            // when followed by a letter (e.g. "djj,ot" = вообще).
-            // But stop at ,/. followed by a boundary (e.g. "ghbdtn, vbh"
-            // — comma is punctuation, not part of word).
+            // when followed by a letter (directly or through more ,/.).
+            // This handles "k.,jv" = любом (., are юб on ЙЦУКЕН).
+            // But stop at ,/. followed by a real boundary (space, etc.).
             var wordEnd = wordStart
             while wordEnd < buffer.endIndex {
                 let ch = buffer[wordEnd]
                 if isBoundary(ch) {
                     if ch == "," || ch == "." {
-                        let nextIdx = buffer.index(after: wordEnd)
-                        if nextIdx < buffer.endIndex, !isBoundary(buffer[nextIdx]) {
-                            wordEnd = nextIdx
+                        if commaPeriodFollowedByLetter(buffer, wordEnd) {
+                            wordEnd = buffer.index(after: wordEnd)
                             continue
                         }
                     }

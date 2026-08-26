@@ -10,6 +10,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), dates in ISO 86
 - **Words with non-letter prefix not converted** — `isWordLatin` checked the first character of each word; if it was a quote or punctuation (e.g. `"nj`, `,tpdjpdhfnyjt`), the word was classified as "not Latin" and the retro walk stopped. Now: `isWordLatin` finds the first actual letter character, correctly classifying words with non-letter prefixes.
 - **Comma/period splitting words that should be joined** — `,` (=`б` on ЙЦУКЕН) and `.` (=`ю`) were in the `boundaries` set, splitting words like `djj,ot` → `djj` + `,` + `ot` → `воо,ще` instead of `вообще`. Now: `parseBufferSegments` keeps `,`/`.` inside words when they're between letters or before letters at word start. Trailing `,`/`.` (followed by boundary/space) still treated as punctuation.
 - **Force-reset on large conversions** — converting 17 words (96 backspaces + 90 chars ≈ 1.67s) exceeded the fixed 1.5s `isReplacingTimeout`, triggering force-reset and losing state. Now: timeout is adaptive — `max(1.5s, expectedDuration + 0.5s margin)` — scaling with delete count and text length.
+- **Consecutive comma/period splitting words** — `k.,jv` (=`любом`) was split at `.` because the next char `,` was also a boundary. The fix only checked ONE character ahead; now `commaPeriodFollowedByLetter` looks through the entire sequence of consecutive `,`/`.` chars to find a letter at the end.
 
 ## [1.2.0] — 2026-08-24
 

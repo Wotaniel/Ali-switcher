@@ -951,6 +951,34 @@ enum SelfTests {
         check("plan: «,tpdjpdhfnyjt yfabu» (manual) → «безвозвратное нафиг»",
               p42f?.convertedText == "безвозвратное нафиг")
 
+        // Consecutive ,/. between letters: "k.,jv" = любом (., = юб)
+        // The old code checked only ONE next char — if it was also ,/.
+        // (which is in boundaries), it broke the word apart.
+        let segs42g = AutoSwitcher.parseBufferSegments("k.,jv")
+        check("segment: «k.,jv» → 1 segment (., between letters)",
+              segs42g.count == 1)
+        check("segment: «k.,jv» → word «k.,jv» (not split!)",
+              segs42g.first?.word == "k.,jv")
+
+        // Full conversion: "k.,jv" → "любом"
+        let p42h = AutoSwitcher.findConversionRange(in: "k.,jv", isManual: true)
+        check("plan: «k.,jv» (manual) → «любом»",
+              p42h?.convertedText == "любом")
+        check("plan: «k.,jv» → wordCount 1", p42h?.wordCount == 1)
+
+        // In context: "d k.,jv" → "в любом"
+        let p42i = AutoSwitcher.findConversionRange(in: "d k.,jv", isManual: true)
+        check("plan: «d k.,jv» (manual) → «в любом»",
+              p42i?.convertedText == "в любом")
+        check("plan: «d k.,jv» → wordCount 2", p42i?.wordCount == 2)
+
+        // Segment parsing in full sentence from logs
+        let segs42j = AutoSwitcher.parseBufferSegments("ye d k.,jv ckexft c Rhb")
+        check("segment: «ye d k.,jv ckexft c Rhb» → 6 segments (k.,jv=one)",
+              segs42j.count == 6)
+        check("segment: [2] = «k.,jv» (not split into k+jv)",
+              segs42j[2].word == "k.,jv")
+
         // --- Scenario 43: Adaptive isReplacingTimeout ---
         // Small conversions: 1.5s minimum (4x safety margin for ~0.4s work)
         check("timeout: 5 del + 5 chars → 1.5s (minimum)",

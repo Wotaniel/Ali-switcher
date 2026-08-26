@@ -381,12 +381,55 @@ enum SelfTests {
         check("hasMixedScript: empty → false",
               AutoSwitcher.hasMixedScript("") == false)
         // Real bug case: «Э"nj» → «ЭЭто» (the original bug from user logs)
+        // First letter «Э» is Cyrillic → user started in Russian → convert
+        // stray Latin chars («"nj» → «Это») to Cyrillic. Direction: EN→RU.
         check("mixed: «Э\"nj» shouldConvert → «ЭЭто»",
               AutoSwitcher.shouldConvert("Э\"nj")?.converted == "ЭЭто")
-        // Direction: cyr=3 (мак) > lat=2 (OS) → toLatin → м→v, а→f, к→r
-        // (QWERTY positions in ЙЦУКЕН). Latin O/S unchanged (not in ruToEn).
-        check("mixed: «макOS» shouldConvert → «vfrOS»",
-              AutoSwitcher.shouldConvert("макOS")?.converted == "vfrOS")
+        check("mixed: «Э\"nj» direction → toCyrillic",
+              AutoSwitcher.shouldConvert("Э\"nj")?.direction == .toCyrillic)
+
+        // Mixed-script direction fix (PR #21):
+        // When a word is mostly-Cyrillic with one stray Latin char at the end,
+        // the first letter determines the "correct" layout. The user was typing
+        // in Russian, then one char leaked from English → convert the stray
+        // Latin char to Cyrillic, NOT the entire word to English.
+        // Old behaviour: «любыхk» → «k.,s[k» (garbled, wrong direction)
+        // New behaviour: «любыхk» → «любыхл» (only «k» → «л»)
+        check("mixed: «любыхk» shouldConvert → «любыхл»",
+              AutoSwitcher.shouldConvert("любыхk")?.converted == "любыхл")
+        check("mixed: «любыхk» direction → toCyrillic",
+              AutoSwitcher.shouldConvert("любыхk")?.direction == .toCyrillic)
+        check("mixed: «любоk» shouldConvert → «любол»",
+              AutoSwitcher.shouldConvert("любоk")?.converted == "любол")
+        check("mixed: «любоk» direction → toCyrillic",
+              AutoSwitcher.shouldConvert("любоk")?.direction == .toCyrillic)
+
+        // Mixed: first letter Latin → user started in English (wrong layout)
+        // → convert stray Cyrillic chars to Latin.
+        // «ghbdtnл» → «ghbdtnk» (л → k, Latin chars stay, direction RU→EN)
+        check("mixed: «ghbdtnл» shouldConvert → «ghbdtnk»",
+              AutoSwitcher.shouldConvert("ghbdtnл")?.converted == "ghbdtnk")
+        check("mixed: «ghbdtnл» direction → toLatin",
+              AutoSwitcher.shouldConvert("ghbdtnл")?.direction == .toLatin)
+
+        // «макOS»: first letter «м» is Cyrillic → user started in Russian
+        // → convert stray Latin «OS» to Cyrillic → «макЩЫ».
+        // Old behaviour: majority Cyrillic → toLatin → «vfrOS» (WRONG —
+        // converted the correct Cyrillic part to Latin).
+        check("mixed: «макOS» shouldConvert → «макЩЫ»",
+              AutoSwitcher.shouldConvert("макOS")?.converted == "макЩЫ")
+        check("mixed: «макOS» direction → toCyrillic",
+              AutoSwitcher.shouldConvert("макOS")?.direction == .toCyrillic)
+
+        // Translit.convert directly on mixed words:
+        check("translit: «любыхk» → «любыхл»",
+              Translit.convert("любыхk")?.converted == "любыхл")
+        check("translit: «любыхk» direction → toCyrillic",
+              Translit.convert("любыхk")?.direction == .toCyrillic)
+        check("translit: «Э\"nj» → «ЭЭто»",
+              Translit.convert("Э\"nj")?.converted == "ЭЭто")
+        check("translit: «макOS» → «макЩЫ»",
+              Translit.convert("макOS")?.converted == "макЩЫ")
 
         // Restore state
         AutoSwitcher.enWords = savedEN

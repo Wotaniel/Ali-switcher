@@ -793,20 +793,27 @@ final class Switcher {
             deleteCount: deleteCount, textLength: text.count)
         state.isReplacing = true; state.isReplacingSince = CFAbsoluteTimeGetCurrent()
         let gen = state.generation  // BUG #4/#5: capture for async callback validation
-        KeyEvents.backspace(count: deleteCount) { [weak self] in
+        // Delay after layout switch before backspace — same as auto-convert.
+        // Without this, the first backspace can be lost (especially in Spotlight
+        // and other system-level fields where event processing timing is tighter).
+        DispatchQueue.main.asyncAfter(deadline: .now() + Timing.autoConvertDelay) { [weak self] in
             guard let self else { return }
-            log("deleted \(deleteCount), typing «\(text)»")
-            KeyEvents.type(text, toRussian: toRussian) { [weak self] in
+            guard self.state.generation == gen else { return }  // stale — abort
+            KeyEvents.backspace(count: deleteCount) { [weak self] in
                 guard let self else { return }
-                self.state.isReplacing = false
-                self.state.busy = false
-                guard self.state.generation == gen else { return }  // stale — skip state write
-                // Replace buffer with converted text → second double-Shift
-                // converts back (toggle) instead of repeating the same conversion.
-                self.state.typedBuffer = text
-                self.state.typedBufferIsFromConversion = true
-                self.state.lastWasSelectionConvert = false
-                self.replayPendingKeystrokes()
+                log("deleted \(deleteCount), typing «\(text)»")
+                KeyEvents.type(text, toRussian: toRussian) { [weak self] in
+                    guard let self else { return }
+                    self.state.isReplacing = false
+                    self.state.busy = false
+                    guard self.state.generation == gen else { return }  // stale — skip state write
+                    // Replace buffer with converted text → second double-Shift
+                    // converts back (toggle) instead of repeating the same conversion.
+                    self.state.typedBuffer = text
+                    self.state.typedBufferIsFromConversion = true
+                    self.state.lastWasSelectionConvert = false
+                    self.replayPendingKeystrokes()
+                }
             }
         }
     }

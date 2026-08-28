@@ -700,6 +700,9 @@ enum SelfTests {
         // → origMisspelled = false → shouldConvert returns nil.
         // Bug was: minLength >= 2 skipped origMisspelled for retroactive.
         // Fix: use word.count >= 2 instead.
+        // "by" is valid EN → shouldConvert returns nil (valid in source).
+        // (In retro walk it may still convert via direction priority — but
+        // shouldConvert is the TRIGGER word check, which requires misspelled.)
         check("retro: «by» → shouldConvert(minLen:1, retro) → nil (valid EN)",
               AutoSwitcher.shouldConvert("by", minLength: 1, isRetroactive: true) == nil)
         check("retro: «he» → shouldConvert(minLen:1, retro) → nil (valid EN)",
@@ -710,16 +713,16 @@ enum SelfTests {
         check("retro: «f» (single-char) → «а»",
               AutoSwitcher.shouldConvert("f", minLength: 1, isRetroactive: true)?.converted == "а")
 
-        // --- Scenario 31: retroactive walk — builtin words go through spell-checker ---
+        // --- Scenario 31: retroactive walk — direction priority (both valid → convert) ---
         // "by ghbdtn" + space → "ghbdtn" triggers, retroactive tries "by".
-        // "by" IS a builtin → spell-checker runs → origMisspelled=false (valid EN)
-        // → walk stops → only «ghbdtn» converts to «привет».
-        // Previously builtins bypassed spell-checker → "by" was incorrectly
-        // converted to «ин» (BUG: «это из сдд» → «'nj bp cll»).
+        // "by" is valid EN, "ин" is valid RU → word in both dictionaries.
+        // Direction EN→RU → Russian priority → CONVERT.
+        // (Previously: origMisspelled=false → stop. Now: also check convValid
+        //  → both valid → direction priority → convert.)
         let d31 = AutoSwitcher.evaluateAutoConvert(buffer: "by ghbdtn", boundaryChar: " ")
-        check("integ: «by ghbdtn» → converts only «ghbdtn»", d31 != nil)
-        check("integ: «by ghbdtn» → «привет» (by is valid EN, stops)", d31?.convertedText == "привет")
-        check("integ: «by ghbdtn» → wordCount 1", d31?.wordCount == 1)
+        check("integ: «by ghbdtn» → converts both", d31 != nil)
+        check("integ: «by ghbdtn» → «ин привет» (both valid → direction priority)", d31?.convertedText == "ин привет")
+        check("integ: «by ghbdtn» → wordCount 2", d31?.wordCount == 2)
 
         // --- Scenario 32: Translit.convert on mixed buffer ---
         // convertTypedText now uses Translit.convert directly for last word
@@ -942,18 +945,53 @@ enum SelfTests {
         // Root cause: isBuiltinWord("это"/"из") = true → !isBuiltinWord = false
         // → spell-checker block skipped entirely → no origMisspelled check →
         // builtins converted without any validation.
-        // Fix: in auto mode, builtins go through spell-checker. «это» and «из»
-        // are valid Russian → origMisspelled=false → walk stops → only «сдд» converts.
+        // Fix: in auto mode, builtins go through spell-checker.
+        // Direction priority: «это»→«'nj» — 'nj NOT valid in EN → stop.
+        // «из»→«bp» — bp IS valid in EN → both valid → direction RU→EN → English wins → convert.
         let p40d = AutoSwitcher.findConversionRange(in: "это из сдд", isManual: false)
-        check("plan: «это из сдд» (auto) → convertedText «cll»", p40d?.convertedText == "cll")
-        check("plan: «это из сдд» → wordCount 1", p40d?.wordCount == 1)
-        check("plan: «это из сдд» → prefix «это из »", p40d?.prefix == "это из ")
+        check("plan: «это из сдд» (auto) → convertedText «bp cll»", p40d?.convertedText == "bp cll")
+        check("plan: «это из сдд» → wordCount 2", p40d?.wordCount == 2)
+        check("plan: «это из сдд» → prefix «это »", p40d?.prefix == "это ")
 
         // Same case in manual mode: builtins BYPASS spell-checker — all convert.
         // User explicitly double-Shifted → no spell-checker for builtins.
         let p40e = AutoSwitcher.findConversionRange(in: "это из сдд", isManual: true)
         check("plan: «это из сдд» (manual) → «'nj bp cll»", p40e?.convertedText == "'nj bp cll")
         check("plan: «это из сдд» (manual) → wordCount 3", p40e?.wordCount == 3)
+
+        // --- Scenario 40b: direction priority — word valid in BOTH dictionaries ---
+        // Clear exception state (previous test added "ghbdtn" to enWords).
+        AutoSwitcher.enWords = []
+
+        // "vs" is a valid English word; "мы" (its conversion) is a valid Russian word.
+        // Direction EN→RU → Russian has priority → convert (don't stop).
+        // Previously: origMisspelled=false → stop → only last word converted.
+        // BUG: «ye djj,ot vs gkfybhjdfkb» → only «gkfybhjdfkb»→«планировали»
+        // instead of full phrase «ну вообще мы планировали».
+        let p40b1 = AutoSwitcher.findConversionRange(in: "vs gkfybhjdfkb", isManual: true)
+        check("plan: «vs gkfybhjdfkb» (manual) → «мы планировали»", p40b1?.convertedText == "мы планировали")
+        check("plan: «vs gkfybhjdfkb» → wordCount 2", p40b1?.wordCount == 2)
+
+        // Same in auto mode: "vs" valid in EN, "мы" valid in RU → both valid → convert.
+        let p40b2 = AutoSwitcher.evaluateAutoConvert(buffer: "vs gkfybhjdfkb", boundaryChar: " ")
+        check("plan: «vs gkfybhjdfkb» (auto) → «мы планировали»", p40b2?.convertedText == "мы планировали")
+        check("plan: «vs gkfybhjdfkb» (auto) → wordCount 2", p40b2?.wordCount == 2)
+
+        // "by" valid in EN, "ин" valid in RU → both valid → direction priority → convert.
+        let p40b3 = AutoSwitcher.evaluateAutoConvert(buffer: "by ghbdtn", boundaryChar: " ")
+        check("plan: «by ghbdtn» → «ин привет» (both valid → direction priority)", p40b3?.convertedText == "ин привет")
+        check("plan: «by ghbdtn» → wordCount 2", p40b3?.wordCount == 2)
+
+        // Edge: "hello" valid in EN, "рузддщ" NOT valid in RU → stop (unchanged).
+        let p40b4 = AutoSwitcher.evaluateAutoConvert(buffer: "hello ghbdtn", boundaryChar: " ")
+        check("plan: «hello ghbdtn» → «привет» (рузддщ invalid, stops)", p40b4?.convertedText == "привет")
+        check("plan: «hello ghbdtn» → wordCount 1", p40b4?.wordCount == 1)
+
+        // Full phrase: all Latin words that convert to valid Russian.
+        let p40b5 = AutoSwitcher.findConversionRange(in: "ye djj,ot vs gkfybhjdfkb", isManual: true)
+        check("plan: «ye djj,ot vs gkfybhjdfkb» (manual) → «ну вообще мы планировали»",
+              p40b5?.convertedText == "ну вообще мы планировали")
+        check("plan: «ye djj,ot vs gkfybhjdfkb» → wordCount 4", p40b5?.wordCount == 4)
 
         // --- Scenario 41: isWordLatin skips non-letter prefix ---
         // Words starting with non-letter chars (quotes, punctuation) should

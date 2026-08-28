@@ -342,8 +342,20 @@ enum AutoSwitcher {
             // origMisspelled (word is gibberish in own language) runs in BOTH
             // modes — otherwise valid words like «есть»/«термин» get converted
             // when user only wanted the last word (BUG: «есть термин АГВ» case).
-            // convValid (converted is valid in target language) is auto-only
-            // per AGENTS.md: "no convValid in manual".
+            //
+            // Direction priority (both modes): if the word is valid in its OWN
+            // language (origMisspelled=false), also check if the CONVERTED word
+            // is valid in the target language. If valid in BOTH → the word exists
+            // in both dictionaries → convert (priority to the conversion direction's
+            // target: EN→RU → Russian wins, RU→EN → English wins).
+            // If valid in source but NOT in target → word genuinely belongs to the
+            // source language → stop.
+            // Example: «vs» → «мы» — both valid → convert. «by» → «ин» — «by"
+            // valid in EN, «ин» NOT valid in RU → stop.
+            //
+            // convValid for gibberish words (origMisspelled=true) is auto-only:
+            // manual mode: user explicitly asked → convert even if result is
+            // gibberish in target.
             let prevLetters = prevSeg.word.filter { $0.isLetter }
             let prevAllCaps = prevLetters.count > 1 && prevLetters.allSatisfy({ $0.isUppercase })
             if !prevAllCaps, !(isBuiltinWord(prevSeg.word) && isManual), prevSeg.word.count >= 2,
@@ -353,23 +365,38 @@ enum AutoSwitcher {
                     language: origLang, wrap: false,
                     inSpellDocumentWithTag: 0, wordCount: nil
                 ).location != NSNotFound
-                if !origMisspelled {
-                    log(.debug, "findRange[\(mode)]: retro «\(prevSeg.word)» → stop (valid in \(origLang))")
-                    break
-                }
 
-                // convValid check (converted must be valid in target language)
-                // is auto-only — manual mode: user explicitly asked.
-                if !isManual {
+                if origMisspelled {
+                    // Word is gibberish in own language → wrong layout candidate.
+                    // Auto: also require convValid (converted must be valid in target).
+                    // Manual: user explicitly asked → convert unconditionally.
+                    if !isManual {
+                        let convValid = checker.checkSpelling(
+                            of: prevResult.converted, startingAt: 0,
+                            language: convLang, wrap: false,
+                            inSpellDocumentWithTag: 0, wordCount: nil
+                        ).location == NSNotFound
+                        if !convValid, !matchesDomainPattern(prevResult.converted) {
+                            log(.debug, "findRange[\(mode)]: retro «\(prevSeg.word)» → stop (converted «\(prevResult.converted)» invalid in \(convLang))")
+                            break
+                        }
+                    }
+                } else {
+                    // Word is valid in source language. Direction-tiebreak:
+                    // check if converted is ALSO valid in target.
+                    // If yes → word exists in both dictionaries → direction
+                    // priority → convert (don't stop).
+                    // If no → word belongs to source language → stop.
                     let convValid = checker.checkSpelling(
                         of: prevResult.converted, startingAt: 0,
                         language: convLang, wrap: false,
                         inSpellDocumentWithTag: 0, wordCount: nil
                     ).location == NSNotFound
                     if !convValid, !matchesDomainPattern(prevResult.converted) {
-                        log(.debug, "findRange[\(mode)]: retro «\(prevSeg.word)» → stop (converted «\(prevResult.converted)» invalid in \(convLang))")
+                        log(.debug, "findRange[\(mode)]: retro «\(prevSeg.word)» → stop (valid in \(origLang), converted «\(prevResult.converted)» invalid in \(convLang))")
                         break
                     }
+                    log(.debug, "findRange[\(mode)]: retro «\(prevSeg.word)» → convert (valid in both \(origLang) & \(convLang), direction=\(direction == .toCyrillic ? "EN→RU" : "RU→EN") → priority to \(convLang))")
                 }
             }
 

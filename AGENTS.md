@@ -132,9 +132,10 @@ Direction is **implicit in the word's script** (alphabet). Two simple `Set<Strin
 - Shared between auto-convert (`isManual: false`) and manual double-Shift (`isManual: true`)
 - **Last word**: ALWAYS converts (no checks for manual; `shouldConvert` for auto)
 - **Retroactive walk**: previous words convert if same script + misspelled in own language
-- **Spell-checker in retro walk**: `origMisspelled` runs in BOTH modes (stops on valid words like «есть», «термин»). `convValid` is auto-only. All-caps words bypass spell-checker (NSSpellChecker treats them as valid acronyms → ЕРФТЛ→THANK works)
-- **Auto-only checks** in retroactive: exceptions block, `convValid`; builtins SKIPPED (retroactive mode)
-- **Manual-only**: no exceptions, no `convValid` — user explicitly asked to convert
+- **Spell-checker in retro walk**: `origMisspelled` runs in BOTH modes. `convValid` (converted must be valid in target) runs in BOTH modes when `origMisspelled=false` (word valid in source). All-caps words bypass spell-checker (NSSpellChecker treats them as valid acronyms → ЕРФТЛ→THANK works)
+- **Direction priority** (both modes): if word is valid in source AND converted is valid in target → word exists in both dictionaries → CONVERT (direction decides: EN→RU → Russian wins, RU→EN → English wins). If valid in source but NOT in target → STOP. Example: «vs»→«мы» both valid → convert; «by»→«ин» «ин» invalid in RU → stop
+- **Auto-only checks** in retroactive: exceptions block, `convValid` for gibberish words (origMisspelled=true); builtins SKIPPED (retroactive mode)
+- **Manual-only**: no exceptions, no `convValid` for gibberish words — user explicitly asked to convert
 - **Single-char words**: convert in retroactive (size doesn't matter). In auto trigger: single-char converts only if result is builtin
 - Returns `ConversionPlan` with: prefix, originalText, convertedText, lastGap, deleteCount, direction
 
@@ -211,7 +212,7 @@ Before making ANY change, read this section:
 
 1. **Read AGENTS.md + relevant source files FIRST.** Don't guess from memory — read the actual code. Memory notes are for context, not for copying code patterns blindly.
 2. **Run `--test` before AND after changes.** If tests fail before your change → fix the pre-existing failure first or report it.
-3. **Manual vs auto:** manual = user double-Shifted = NO spell-checker, NO exceptions, NO builtins on the LAST word. BUT `origMisspelled` DOES run in manual retro walk — it stops on valid words like «есть» to prevent converting entire sentences.
+3. **Manual vs auto:** manual = user double-Shifted = NO spell-checker, NO exceptions, NO builtins on the LAST word. BUT `origMisspelled` DOES run in manual retro walk — it stops on valid words like «есть». **Direction priority**: if word is valid in BOTH source and target → convert (direction's target wins). «vs»→«мы» both valid → convert. «by»→«ин» only «by» valid → stop.
 4. **Single-char conversion rule:** a single-char converts ONLY if its result is in the builtin list. This works BOTH directions. Don't revert to the old one-directional rule.
 5. **Mixed-script words:** `hasMixedScript` → skip spell-checker, convert directly. A word with both Cyrillic AND Latin = always wrong layout.
 6. **Two independent word lists:** `enWords` (Latin) and `ruWords` (Cyrillic). Direction is implicit in script. No pairs, no dictionary, no force-convert. Don't re-introduce paired/structured exceptions.

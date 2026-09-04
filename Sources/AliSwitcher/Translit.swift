@@ -32,10 +32,16 @@ enum Translit {
         "О": "J", "Л": "K", "Д": "L", "Ж": ":", "Э": "\"",
         "Я": "Z", "Ч": "X", "С": "C", "М": "V", "И": "B", "Т": "N",
         "Ь": "M", "Б": "<", "Ю": ">",
-        // dot in the Russian layout is "/" in the English one
-        ".": "/",
-        // punctuation: key-based mapping (Shift+6 RU = ":", EN gives "^", etc.)
-        "№": "#", "\"": "@", ";": "$", ":": "^", "?": "&",
+        // macOS Russian layout symbols (DIFFERENT from Windows ЙЦУКЕН!).
+        // Verified via UCKeyTranslate dump of com.apple.keylayout.Russian:
+        //   Shift+2 = ", Shift+3 = №, Shift+4 = %, Shift+5 = :,
+        //   Shift+6 = ",", Shift+7 = ".", Shift+8 = ";"
+        //   key 44 = "/" in BOTH layouts, Shift+44 = "?" in BOTH layouts.
+        // (Windows map was wrong: "." was on key 44 and "?" on Shift+7 —
+        // that's why re-typing "?" produced "." on Mac.)
+        "№": "#", "\"": "@",
+        "%": "$", ":": "%", ",": "^", ".": "&", ";": "*",
+        "?": "?", "/": "/",
     ]
 
     private static let enToRu: [Character: Character] = {

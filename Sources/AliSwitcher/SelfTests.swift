@@ -55,7 +55,7 @@ enum SelfTests {
         // RU → EN
         check("RU→EN «привет»", conv("привет") == "ghbdtn")
         check("RU→EN «Привет Мир»", conv("Привет Мир") == "Ghbdtn Vbh")
-        check("RU→EN «раскладке:» (знаки)", conv("раскладке:") == "hfcrkflrt^")
+        check("RU→EN «раскладке:» (знаки)", conv("раскладке:") == "hfcrkflrt%")
         check("RU→EN «нужно чтобы»", conv("нужно чтобы") == "ye;yj xnj,s")
         check("RU→EN «б»→«,»", conv("б") == ",")
         check("RU→EN «Б»→«<»", conv("Б") == "<")
@@ -64,7 +64,9 @@ enum SelfTests {
         check("RU→EN «ж»→«;», «э»→«'»", conv("жэ") == ";'")
         check("RU→EN «ю»→«.», «я»→«z»", conv("юя") == ".z")
         // Signs inside a word (a lone sign is skipped by convert(): no letters)
-        check("RU→EN «привет.» точка→«/»", conv("привет.") == "ghbdtn/")
+        check("RU→EN «привет.» точка→«&» (Shift+7 на маке)", conv("привет.") == "ghbdtn&")
+        check("RU→EN «,»→«^» (запятая на Shift+6)", conv("привет,") == "ghbdtn^")
+        check("RU→EN «?»→«?» (универсальный символ)", conv("привет?") == "ghbdtn?")
         check("RU→EN «день №»→«ltym #»", conv("день №") == "ltym #")
 
         // EN → RU
@@ -73,7 +75,9 @@ enum SelfTests {
         check("EN→RU «,»→«б»", conv("ghbdtn,") == "приветб")
         check("EN→RU «.»→«ю»", conv("ghbdtn.") == "приветю")
         check("EN→RU «[»→«х», «{»→«Х»", conv("ghbdtn[{") == "приветхХ")
-        check("EN→RU «^»→«:», «&»→«?»", conv("ghbdtn^&") == "привет:?")
+        check("EN→RU «^»→«,», «&»→«.» (мак-карта)", conv("ghbdtn^&") == "привет,.")
+        check("EN→RU «?»→«?» (универсальный символ)", conv("ghbdtn?") == "привет?")
+        check("EN→RU «%»→«:», «*»→«;», «$»→«%»", conv("ghbdtn%*$") == "привет:;%")
         check("EN→RU «@»→«\"»", conv("ghbdtn@") == "привет\"")
         check("EN→RU «;»→«ж»", conv("ghbdtn;") == "приветж")
 
@@ -88,7 +92,8 @@ enum SelfTests {
         check("пусто → nil", conv("") == nil)
 
         // User example: it is the FRAGMENT that gets converted (as in the real scenario)
-        let chunk = " b yfgbcfk ytcrjkmrj ckjd yf lheujq hfcrkflrt^ ye;yj xnj,s dsltkbkjcm dct yfgbcfyyjt b"
+        // (":" на мак-EN = Shift+5 = "%" — виндовая карта дала бы "^")
+        let chunk = " b yfgbcfk ytcrjkmrj ckjd yf lheujq hfcrkflrt% ye;yj xnj,s dsltkbkjcm dct yfgbcfyyjt b"
         check("пример пользователя: конвертация фрагмента",
               conv(chunk) == " и написал несколько слов на другой раскладке: нужно чтобы выделилось все написанное и",
               "получили: «\(conv(chunk) ?? "nil")»")
@@ -116,10 +121,10 @@ enum SelfTests {
         check("пустой текст → 0",
               chunk(of: "", caret: 0) == "")
 
-        let example = "я начал писать что-то, случайно переключил раскладку b yfgbcfk ytcrjkmrj ckjd yf lheujq hfcrkflrt^ ye;yj xnj,s dsltkbkjcm dct yfgbcfyyjt b"
+        let example = "я начал писать что-то, случайно переключил раскладку b yfgbcfk ytcrjkmrj ckjd yf lheujq hfcrkflrt% ye;yj xnj,s dsltkbkjcm dct yfgbcfyyjt b"
         let exChunk = chunk(of: example, caret: (example as NSString).length)
         check("пример пользователя: фрагмент = вся «не та» фраза",
-              exChunk == " b yfgbcfk ytcrjkmrj ckjd yf lheujq hfcrkflrt^ ye;yj xnj,s dsltkbkjcm dct yfgbcfyyjt b",
+              exChunk == " b yfgbcfk ytcrjkmrj ckjd yf lheujq hfcrkflrt% ye;yj xnj,s dsltkbkjcm dct yfgbcfyyjt b",
               "получили: «\(exChunk)»")
     }
 

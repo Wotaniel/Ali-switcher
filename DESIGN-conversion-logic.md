@@ -1,8 +1,9 @@
 # Design Document: AliSwitcher Conversion Logic
 
-> **Status**: Design spec for Bug Fixes #1–#5  
+> **Статус**: исторический документ (design spec багфиксов #1–#5, 2026-08-21)  
+> **Актуальная бизнес-логика**: `BUSINESS-LOGIC.md` — подробный справочник всех  
+> шагов/проверок auto и manual конвертации + диаграммы (2026-09-07)  
 > **Scope**: Auto-convert triggers, manual double-Shift, mixed-text handling, state management, error handling  
-> **Date**: 2026-08-21
 
 ---
 
@@ -601,6 +602,36 @@ During this gap, `isReplacing` might be true (in-flight conversion). The complet
 ---
 
 ## Appendix A: State Transition Diagram
+
+> **ВАЖНО**: канонический, актуальный документ бизнес-логики — `BUSINESS-LOGIC.md`
+> (все шаги/проверки auto и manual конвертации + диаграммы).
+> Диаграмма ниже обновлена 2026-09-07 для согласованности с ним.
+
+```mermaid
+stateDiagram-v2
+    [*] --> IDLE
+    IDLE --> SWAPPING : двойной Shift / граница слова (авто)
+    SWAPPING --> REPLACING : LayoutSwitch.select ок
+    SWAPPING --> IDLE : раскладка не найдена / secureField / план пуст
+    REPLACING --> REPLACING : съедание клавиш (text→pending, BS→queued, reset→gen++)
+    REPLACING --> REPLAY : backspace×N + type(M) завершён, gen совпал
+    REPLACING --> IDLE : watchdog timeout или .reset во время замены (gen++)
+    REPLAY --> IDLE : переигран pending текст + queued backspace
+    IDLE --> UNDOING : двойной Shift в undo-окне (после автоконверта)
+    UNDOING --> IDLE : откат завершён + learnException(слово)
+```
+
+Обозначения состояний:
+
+| Состояние | Поля | Комментарий |
+|---|---|---|
+| `IDLE` | `busy=false`, `isReplacing=false` | `typedBuffer` отслеживает нажатия |
+| `SWAPPING` | `busy=true` | выполняется `performSwitch` / `tryAutoConvert` — выбор диапазона, сегментация, спелл-чек |
+| `REPLACING` | `isReplacing=true`, `busy=true`, `generation=N` | цепочка backspace→type в полёте; реальные нажатия съедаются в `pendingCharacters`/`pendingBackspaces` |
+| `REPLAY` | — | после завершения: переигрываются съеденные символы, затем backspaces |
+| `UNDOING` | `busy=true` | `undoAutoConvert` — обратный конверт + обучение исключению |
+
+Исходная ASCII-версия (историческая, соответствует багфиксам #1–#5):
 
 ```
                     ┌─────────┐

@@ -1158,8 +1158,60 @@ enum SelfTests {
         check("timeout: 96 del + 90 chars → <3.5s (not excessive)",
               t43c < 3.5)
 
+        // --- Scenario 45: edge-case marathon from field history (2026-09) ---
+        // Every case below is a real-world failure that slipped past earlier
+        // rules (user logs, live sessions). If any of these breaks again,
+        // the corresponding regression caught it here.
+        let savedEN45 = AutoSwitcher.enWords
+        let savedRU45 = AutoSwitcher.ruWords
+        AutoSwitcher.enWords = []
+        AutoSwitcher.ruWords = []
+
+        // 45a. User log 2026-09-11 12:31, AUTO variant: «штзгеы» = «inputs»
+        // typed in RU layout. Builtins «но», «все» are correct Russian —
+        // spell-checker stops the retro walk (auto behavior since PR #25).
+        let p45a = AutoSwitcher.findConversionRange(in: "но все штзгеы", isManual: false)
+        check("45a: «но все штзгеы» (auto) → «inputs» only", p45a?.convertedText == "inputs")
+        check("45a: wordCount 1", p45a?.wordCount == 1)
+        check("45a: prefix «но все »", p45a?.prefix == "но все ")
+
+        // 45b. Same buffer with the mid-chain word learned as exception.
+        // The exception Set lookup (auto-only) now sits BEFORE the spell-checker
+        // (phase 1 reorder) — must still stop the walk at «все».
+        AutoSwitcher.ruWords = ["все"]
+        let p45b = AutoSwitcher.findConversionRange(in: "но все штзгеы", isManual: false)
+        check("45b: exception «все» mid-chain → «inputs» only", p45b?.convertedText == "inputs")
+        check("45b: wordCount 1", p45b?.wordCount == 1)
+        AutoSwitcher.ruWords = []
+
+        // 45c. Full context from the same log line: comma-rich fragment,
+        // comma stays inside «смотри,» (`,` on ЙЦУКЕН is a letter — б).
+        let p45c = AutoSwitcher.findConversionRange(
+            in: "смотри, вот в рамках этого но все штзгеы", isManual: true)
+        check("45c: full log fragment (manual) → «inputs» only", p45c?.convertedText == "inputs")
+        check("45c: wordCount 1", p45c?.wordCount == 1)
+        check("45c: prefix intact",
+              p45c?.prefix == "смотри, вот в рамках этого но все ")
+
+        // 45d. macOS Smart Quotes: “ (U+201C) replaced the ASCII quote typed
+        // via Shift+э — must convert the same as «Э"nj» → «ЭЭто».
+        let p45d = AutoSwitcher.findConversionRange(in: "Э\u{201C}nj", isManual: true)
+        check("45d: smart-quote word (manual) → «ЭЭто»", p45d?.convertedText == "ЭЭто")
+
+        // 45e. WordShape single-scan sanity (phase 2 refactor).
+        check("45e: shape «\\\"nj» → isLatin (skips quote prefix)",
+              AutoSwitcher.shape(of: "\"nj").isLatin == true)
+        check("45e: shape empty → NOT latin",
+              AutoSwitcher.shape(of: "").isLatin == false)
+        check("45e: shape «ЕРФТЛ» → all-caps", AutoSwitcher.shape(of: "ЕРФТЛ").isAllCaps == true)
+        check("45e: shape «шЗрщту» → NOT all-caps (mixed case)",
+              AutoSwitcher.shape(of: "шЗрщту").isAllCaps == false)
+        check("45e: shape «aЯbЫ» → mixed + first-letter latin",
+              AutoSwitcher.shape(of: "aЯbЫ").hasMixedScript == true
+              && AutoSwitcher.shape(of: "aЯbЫ").isLatin == true)
+
         // Restore state
-        AutoSwitcher.enWords = savedEN
-        AutoSwitcher.ruWords = savedRU
+        AutoSwitcher.enWords = savedEN45
+        AutoSwitcher.ruWords = savedRU45
     }
 }

@@ -11,6 +11,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), dates in ISO 86
 - **`Permissions.swift`** — centralized permission checks (`accessibilityGranted`, `inputMonitoringGranted`, `allGranted`) and "open System Settings" actions. Previously scattered across `Accessibility.swift`, `UIManager.swift`, and `main.swift`. UIManager's `@objc` methods are now thin wrappers. `Accessibility.swift` no longer has `isTrusted`/`requestPermissionIfNeeded`.
 
 ### Changed
+- **Dead-code cleanup (no behavior change)** — removed `isSingleCharConvertible` (production paths never called it; the rule lives in shouldConvert step 4c) and `isBuiltinWordRetrospective` + the `isRetroactive` parameter of `shouldConvert` (the parameter was always false at runtime — the retro walk has its own inline checks; the builtin trigger rule now calls `isBuiltinWord` directly). Test helpers and stale comments updated accordingly; 353 checks green.
 - **Word shape single-scan (phase 2 refactor, no behavior change)** — new `AutoSwitcher.WordShape` + `shape(of:)`: script, all-caps, digits, underscore, mixed-script and letter stats computed in ONE pass per word. `shouldConvert` structural filters, the retro walk and `containsDigits`/`containsUnderscore`/`hasMixedScript`/`isWordLatin` all read the shape instead of re-scanning the string 3–4 times. Five inline NSSpellChecker call blocks collapsed into two primitives (`isMisspelled(_:in:)`, `validOrDomain(_:in:)`) shared by the trigger filter and the retro walk.
 - **Check pipeline reordered (phase 1 refactor, no behavior change)** — retro walk: learned-exception Set lookup moved BEFORE the spell-checker (an excepted word no longer pays for up to two NSSpellChecker calls before getting its stop). `shouldConvert` accepts a precomputed `Translit.convert` result — the trigger word's conversion no longer runs twice per check. `evaluateAutoConvert` reduced to a thin wrapper over `findConversionRange` (duplicate buffer parse and a redundant min-length guard removed). Duplicate `!busy`/`!isReplacing` guard dropped from `tryAutoConvert` — its only call site is the auto-mode gate in `handle()`, which already checks all conditions. `LayoutSwitch.select` caches the TIS input-source list (a system call on every conversion before) and refreshes it once on a failed select, so edits to layouts in System Settings still work.
 
@@ -56,7 +57,6 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), dates in ISO 86
 - `isBuiltinWord` now case-insensitive (lowercase lookup) — uppercase «I» no longer bypasses builtin check.
 - `README.md` rewritten to cover all functionality.
 
-### Removed
 - Hardcoded builtin word arrays in `AutoSwitcher.swift` (replaced by txt files).
 - Stale DMG files: `AliSwitcher 2.dmg`, `AliSwitcher 3.dmg`, `AliSwitcher 4.dmg`, `AliSwitcher 5.dmg`, `AliSwitcher.dmg` (replaced by single versioned `AliSwitcher-1.2.0.dmg`).
 
@@ -95,7 +95,6 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), dates in ISO 86
 - `.gitignore`: `dist/` folder unignored (DMG installers tracked in git).
 - Source files: 10 → 12 (SwitcherState.swift + UIManager.swift added).
 
-### Removed
 - Inline retroactive walk in `convertTypedText` (replaced by `findConversionRange`).
 - Inline retroactive walk in `evaluateAutoConvert` (replaced by `findConversionRange`).
 - `AutoConvertDecision` struct (replaced by `ConversionPlan`).

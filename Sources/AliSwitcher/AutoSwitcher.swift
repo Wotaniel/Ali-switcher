@@ -89,16 +89,6 @@ enum AutoSwitcher {
         return try! NSRegularExpression(pattern: combined, options: [])
     }()
 
-    /// Checks if a 1-character word converts to a letter of the other script.
-    /// Used in retroactive mode: if we already know the user was typing in
-    /// the wrong layout, a single char that converts is also wrong.
-    /// Universal — no hardcoded word list, works for any letter.
-    static func isSingleCharConvertible(_ word: String) -> Bool {
-        guard word.count == 1 else { return false }
-        guard let result = Translit.convert(word), result.converted != word else { return false }
-        return result.converted.count == 1 && result.converted.first!.isLetter
-    }
-
     /// Is this character a word boundary?
     static func isBoundary(_ ch: Character) -> Bool {
         boundaries.contains(ch) || ch.isWhitespace
@@ -356,7 +346,7 @@ enum AutoSwitcher {
         // Pass the Translit result we already computed — shouldConvert reuses
         // it instead of running the conversion a second time.
         if !isManual {
-            guard shouldConvert(lastSeg.word, isRetroactive: false, precomputed: lastResult) != nil else {
+            guard shouldConvert(lastSeg.word, precomputed: lastResult) != nil else {
                 log(.debug, "findRange[\(mode)]: last word «\(lastSeg.word)» failed shouldConvert → nil")
                 return nil
             }
@@ -547,23 +537,17 @@ enum AutoSwitcher {
         }
     }
 
-    // Removed: enDictionary, ruDictionary, rebuildLearnedSets, isLearnedDictionary.
-
-    /// Is this word in the built-in common words list (NEVER convert)?
-    /// In retroactive mode, builtins are skipped — the user was already
-    /// typing in the wrong layout, so even common words should convert.
-    static func isBuiltinWordRetrospective(_ word: String, retroactive: Bool) -> Bool {
-        guard !retroactive else { return false }
-        return isBuiltinWord(word)
-    }
+    // Removed: enDictionary, ruDictionary, rebuildLearnedSets, isLearnedDictionary,
+    // isSingleCharConvertible, isBuiltinWordRetrospective.
 
     /// Determines whether a word was typed in the wrong layout.
     /// Returns the converted text + direction if auto-conversion is needed.
     ///
+    /// Called ONLY for the trigger word (the last word of the buffer) — the
+    /// retro walk has its own inline checks in findConversionRange.
+    ///
     /// Criteria (all must hold):
-    /// 1. Word length ≥ minLength (default 2; lowered to 1 for retroactive checks —
-    ///    when we already know the user was typing in the wrong layout from
-    ///    the previous word, single characters like "f" → "а" are valid).
+    /// 1. Word length ≥ minLength (default 1; single chars handled at 4c)
     /// 2. Contains at least one letter.
     /// 3. Is not all-uppercase (like "HTML", "API" — likely abbreviations).
     /// 3b. Does not contain digits (like "iPhone15", "3D" — code or codenames).
@@ -580,7 +564,7 @@ enum AutoSwitcher {
     /// `precomputed`: caller may pass the Translit.convert result it already
     /// holds (e.g. findConversionRange computes it for the trigger word) to
     /// avoid running the conversion twice.
-    static func shouldConvert(_ word: String, minLength: Int = minWordLength, isRetroactive: Bool = false, precomputed: (converted: String, direction: SwitchDirection)? = nil) -> (converted: String, direction: SwitchDirection)? {
+    static func shouldConvert(_ word: String, minLength: Int = minWordLength, precomputed: (converted: String, direction: SwitchDirection)? = nil) -> (converted: String, direction: SwitchDirection)? {
         // One scan per word — every structural filter below reads the shape.
         let s = shape(of: word)
 
@@ -610,11 +594,11 @@ enum AutoSwitcher {
         guard let result = precomputed ?? Translit.convert(word) else { return nil }
         guard result.converted != word else { return nil }
 
-        // 4a) Built-in common words — NEVER convert (unless retroactive).
-        // These are high-frequency words that NSSpellChecker may miss.
-        // In retroactive mode, skip this check — the user was already typing
-        // in the wrong layout, so even common words should be converted.
-        if isBuiltinWordRetrospective(word, retroactive: isRetroactive) {
+        // 4a) Built-in common words — NEVER auto-convert.
+        // High-frequency words that NSSpellChecker may miss; the user types
+        // them constantly. (In the RETRO walk the rule is different: builtins
+        // go through the spell-checker there — see findConversionRange.)
+        if isBuiltinWord(word) {
             return nil
         }
 

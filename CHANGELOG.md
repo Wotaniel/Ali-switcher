@@ -6,6 +6,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), dates in ISO 86
 ## [Unreleased]
 
 ### Added
+- **Edge-case marathon (Scenario 45 in self-tests)** — 14 checks pinning every real-world failure from field history: «но все штзгеы» (auto + with mid-chain exception), full log fragment «смотри, вот в рамках этого но все штзгеы» (manual), macOS Smart Quotes through the full pipeline, WordShape single-scan sanity. 360 checks total, all green.
 - **Logger with levels and rotation** — new `Logger.swift` (`LogLevel` enum: `.debug`/`.info`/`.warn`/`.error`). Log path moved from `/tmp/AliSwitcher.log` to `~/Library/Logs/AliSwitcher.log` (survives reboot). Rotation at 1 MB, 3 files max. Level configurable via UserDefaults: `defaults write com.aliswitcher.AliSwitcher logLevel -int 0` (debug). Default: `.info`. Existing `log("msg")` calls work unchanged (default `.info`); verbose calls (findRange, convert details, replay, isReplacing START/END) moved to `.debug`; warnings (event tap fail, isReplacing stuck, no target layout, etc.) moved to `.warn`.
 - **`Permissions.swift`** — centralized permission checks (`accessibilityGranted`, `inputMonitoringGranted`, `allGranted`) and "open System Settings" actions. Previously scattered across `Accessibility.swift`, `UIManager.swift`, and `main.swift`. UIManager's `@objc` methods are now thin wrappers. `Accessibility.swift` no longer has `isTrusted`/`requestPermissionIfNeeded`.
 

@@ -283,22 +283,10 @@ enum SelfTests {
         // Non-exception word still converts normally.
         check("exception: «ghbdtn» removed → converts", AutoSwitcher.shouldConvert("ghbdtn") != nil || true)
 
-        // 6) Single-char conversion (universal, not hardcoded prepositions)
-        check("single-char: «f» → isSingleCharConvertible (→ «а»)",
-              AutoSwitcher.isSingleCharConvertible("f"))
-        check("single-char: «b» → isSingleCharConvertible (→ «и»)",
-              AutoSwitcher.isSingleCharConvertible("b"))
-        check("single-char: «d» → isSingleCharConvertible (→ «в»)",
-              AutoSwitcher.isSingleCharConvertible("d"))
-        check("single-char: «q» → isSingleCharConvertible (→ «й»)",
-              AutoSwitcher.isSingleCharConvertible("q"))
-        check("single-char: «x» → isSingleCharConvertible (→ «ч»)",
-              AutoSwitcher.isSingleCharConvertible("x"))
-        // Non-convertible
-        check("single-char: «ghbdtn» → НЕ single char",
-              !AutoSwitcher.isSingleCharConvertible("ghbdtn"))
-        check("single-char: «» → НЕ single char (empty)",
-              !AutoSwitcher.isSingleCharConvertible(""))
+        // Single-char conversion rules are covered by Scenarios 3/17/27/34/35
+        // and the integration marathon (45e). The old isSingleCharConvertible
+        // helper was removed in the dead-code cleanup (production paths never
+        // called it).
 
         // shouldConvert with minLength: 1 for single-char.
         // Rule: convert ONLY if the result is a builtin word.
@@ -668,18 +656,15 @@ enum SelfTests {
         check("shouldConvert: «any» (primary) → nil", AutoSwitcher.shouldConvert("any") == nil)
         check("shouldConvert: «man» (primary) → nil", AutoSwitcher.shouldConvert("man") == nil)
 
-        // --- Scenario 27: single-char retroactive — result must be builtin ---
-        // «I»→«Ш»: Ш NOT in builtinRuWords → nil (even in retroactive).
-        // «a»→«ф»: ф NOT in builtinRuWords → nil.
-        // Retroactive bypasses step 4a builtin check, but step 4c still
-        // requires the converted result to be a builtin word.
-        check("shouldConvert: «I» (retroactive) → nil (result «Ш» NOT builtin)",
-              AutoSwitcher.shouldConvert("I", minLength: 1, isRetroactive: true) == nil)
-        check("shouldConvert: «a» (retroactive) → nil (result «ф» NOT builtin)",
-              AutoSwitcher.shouldConvert("a", minLength: 1, isRetroactive: true) == nil)
-        // «d»→«в»: в IS builtin RU → converts even retroactively.
-        check("shouldConvert: «d» (retroactive) → «в» (result IS builtin)",
-              AutoSwitcher.shouldConvert("d", minLength: 1, isRetroactive: true)?.converted == "в")
+        // --- Scenario 27: single-char — result must be builtin (step 4c) ---
+        // «I»→«Ш»: Ш NOT in builtinRuWords → nil. «a»→«ф»: ф NOT builtin → nil.
+        // «d»→«в»: в IS builtin RU → converts.
+        check("shouldConvert: «I» → nil (result «Ш» NOT builtin)",
+              AutoSwitcher.shouldConvert("I", minLength: 1) == nil)
+        check("shouldConvert: «a» → nil (result «ф» NOT builtin)",
+              AutoSwitcher.shouldConvert("a", minLength: 1) == nil)
+        check("shouldConvert: «d» → «в» (result IS builtin)",
+              AutoSwitcher.shouldConvert("d", minLength: 1)?.converted == "в")
 
         // --- Scenario 28: «f» single-char → converts (result «а» is builtin) ---
         let d28 = AutoSwitcher.evaluateAutoConvert(buffer: "f", boundaryChar: " ")
@@ -708,15 +693,14 @@ enum SelfTests {
         // "by" is valid EN → shouldConvert returns nil (valid in source).
         // (In retro walk it may still convert via direction priority — but
         // shouldConvert is the TRIGGER word check, which requires misspelled.)
-        check("retro: «by» → shouldConvert(minLen:1, retro) → nil (valid EN)",
-              AutoSwitcher.shouldConvert("by", minLength: 1, isRetroactive: true) == nil)
-        check("retro: «he» → shouldConvert(minLen:1, retro) → nil (valid EN)",
-              AutoSwitcher.shouldConvert("he", minLength: 1, isRetroactive: true) == nil)
-        check("retro: «is» → shouldConvert(minLen:1, retro) → nil (valid EN)",
-              AutoSwitcher.shouldConvert("is", minLength: 1, isRetroactive: true) == nil)
-        // Non-builtin multi-char retroactive: still converts if orig is misspelled
-        check("retro: «f» (single-char) → «а»",
-              AutoSwitcher.shouldConvert("f", minLength: 1, isRetroactive: true)?.converted == "а")
+        check("shouldConvert: «by» → nil (valid EN)",
+              AutoSwitcher.shouldConvert("by", minLength: 1) == nil)
+        check("shouldConvert: «he» → nil (valid EN)",
+              AutoSwitcher.shouldConvert("he", minLength: 1) == nil)
+        check("shouldConvert: «is» → nil (valid EN)",
+              AutoSwitcher.shouldConvert("is", minLength: 1) == nil)
+        check("shouldConvert: «f» (single-char) → «а»",
+              AutoSwitcher.shouldConvert("f", minLength: 1)?.converted == "а")
 
         // --- Scenario 31: retroactive walk — direction priority (both valid → convert) ---
         // "by ghbdtn" + space → "ghbdtn" triggers, retroactive tries "by".
@@ -740,13 +724,13 @@ enum SelfTests {
         check("translit: «Ш» → «I»",
               Translit.convert("Ш")?.converted == "I")
 
-        // --- Scenario 33: shouldConvert still used for auto-switch retroactive ---
-        // Auto-switch retroactive walk uses shouldConvert to decide if previous
-        // words should be converted. Valid words stop the walk.
-        check("shouldConvert: «ghbdtn» (retro) → «привет»",
-              AutoSwitcher.shouldConvert("ghbdtn", minLength: 1, isRetroactive: true)?.converted == "привет")
-        check("shouldConvert: «привет» (retro) → nil (valid RU)",
-              AutoSwitcher.shouldConvert("привет", minLength: 1, isRetroactive: true) == nil)
+        // --- Scenario 33: shouldConvert basics — trigger word checks ---
+        // Retro walk has its own inline checks; shouldConvert serves only
+        // the trigger word. Valid words never convert.
+        check("shouldConvert: «ghbdtn» → «привет»",
+              AutoSwitcher.shouldConvert("ghbdtn", minLength: 1)?.converted == "привет")
+        check("shouldConvert: «привет» → nil (valid RU)",
+              AutoSwitcher.shouldConvert("привет", minLength: 1) == nil)
 
         // --- Scenario 34: single-char conversion rule ---
         // Convert ONLY if result is in builtin list.
@@ -757,8 +741,8 @@ enum SelfTests {
               AutoSwitcher.shouldConvert("Ш", minLength: 1)?.converted == "I")
         check("shouldConvert: «ш» (minLen:1) → «i» (result is builtin EN)",
               AutoSwitcher.shouldConvert("ш", minLength: 1)?.converted == "i")
-        check("shouldConvert: «I» (minLen:1, retro) → «Ш» (result Ш not builtin → nil)",
-              AutoSwitcher.shouldConvert("I", minLength: 1, isRetroactive: true) == nil)
+        check("shouldConvert: «I» (minLen:1) → nil (result «Ш» not builtin)",
+              AutoSwitcher.shouldConvert("I", minLength: 1) == nil)
 
         // --- Scenario 35: single-char auto-convert ---
         // Single chars convert ONLY if result is in builtin list.

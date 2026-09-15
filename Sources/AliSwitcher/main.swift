@@ -466,9 +466,11 @@ final class Switcher {
     /// last boundary character) and attempts auto-conversion via NSSpellChecker.
     /// Returns true if auto-conversion was triggered (boundary char blocked),
     /// false if no conversion needed (boundary char should pass through).
+    ///
+    /// Invariant: the ONLY call site is the auto-mode gate in handle(),
+    /// which has already verified !busy, !isReplacing, !secureField,
+    /// !isSynthetic, !anyEditorVisible — no state re-checks here.
     private func tryAutoConvert(boundaryChar: String) -> Bool {
-        guard !state.busy, !state.isReplacing else { return false }
-
         // Delegate to the pure function (shared with tests).
         // This ensures the real code path and test code path are identical.
         guard let decision = AutoSwitcher.evaluateAutoConvert(

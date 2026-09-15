@@ -286,8 +286,10 @@ enum AutoSwitcher {
         // For auto-convert: trigger word must pass shouldConvert checks.
         // (builtins, exceptions, spell-checker, structural filters).
         // For manual: last word always converts — no dictionary checks.
+        // Pass the Translit result we already computed — shouldConvert reuses
+        // it instead of running the conversion a second time.
         if !isManual {
-            guard shouldConvert(lastSeg.word, isRetroactive: false) != nil else {
+            guard shouldConvert(lastSeg.word, isRetroactive: false, precomputed: lastResult) != nil else {
                 log(.debug, "findRange[\(mode)]: last word «\(lastSeg.word)» failed shouldConvert → nil")
                 return nil
             }
@@ -321,6 +323,15 @@ enum AutoSwitcher {
                   prevResult.direction == direction,
                   prevResult.converted != prevSeg.word else {
                 log(.debug, "findRange[\(mode)]: retro «\(prevSeg.word)» → stop (Translit fail / same direction / no change)")
+                break
+            }
+
+            // Exceptions block (user undid this word before).
+            // Cheap O(1) set lookup — runs BEFORE the spell-checker so an
+            // excepted word never pays for two NSSpellChecker calls.
+            // Manual mode: user explicitly wants conversion — exceptions don't apply.
+            if !isManual, isLearnedException(prevSeg.word) {
+                log(.debug, "findRange[\(mode)]: retro «\(prevSeg.word)» → stop (learned exception)")
                 break
             }
 
@@ -400,13 +411,6 @@ enum AutoSwitcher {
                 }
             }
 
-            // Exceptions block (user undid this word before).
-            // Manual mode: user explicitly wants conversion — ignore exceptions.
-            if !isManual, isLearnedException(prevSeg.word) {
-                log(.debug, "findRange[\(mode)]: retro «\(prevSeg.word)» → stop (learned exception)")
-                break
-            }
-
             log(.debug, "findRange[\(mode)]: retro «\(prevSeg.word)» → «\(prevResult.converted)» ✓")
             convertedText = prevResult.converted + gap + convertedText
             wordIndex -= 1
@@ -450,27 +454,15 @@ enum AutoSwitcher {
 
     /// Evaluates whether the buffer should be auto-converted on a word boundary.
     /// Pure function — returns a decision or nil (no conversion needed).
-    /// This is the EXACT same logic as Switcher.tryAutoConvert, extracted so
-    /// tests can call the real code path instead of reimplementing it.
+    /// Thin wrapper over findConversionRange (isManual: false): the empty/short
+    /// last-word guard there already covers everything this used to check.
+    /// `boundaryChar` kept in the signature for call-site readability
+    /// (handle() passes the boundary it just saw).
     static func evaluateAutoConvert(
         buffer: String,
         boundaryChar: String
     ) -> ConversionPlan? {
-        let segments = parseBufferSegments(buffer)
-
-        // Auto-convert: single-char words CAN trigger. Builtin word lists
-        // protect common single-char words (а, в, и, I, a) from false
-        // positives. Uncommon single chars (ф→a, й→q) will convert —
-        // they're almost certainly typed in the wrong layout.
-        guard let lastSegment = segments.last,
-              lastSegment.word.count >= minWordLength else {
-            return nil
-        }
-
-        // Delegate to unified function (isManual=false → auto-convert checks).
-        guard let plan = findConversionRange(in: buffer, isManual: false) else { return nil }
-
-        return plan
+        findConversionRange(in: buffer, isManual: false)
     }
 
     // MARK: - Learned words (two independent lists)
@@ -533,7 +525,11 @@ enum AutoSwitcher {
     ///    count ≥ 2). Single-char words skip this check — NSSpellChecker
     ///    considers all single letters "valid", so we rely on the fact that
     ///    the main word already proved wrong layout.
-    static func shouldConvert(_ word: String, minLength: Int = minWordLength, isRetroactive: Bool = false) -> (converted: String, direction: SwitchDirection)? {
+    ///
+    /// `precomputed`: caller may pass the Translit.convert result it already
+    /// holds (e.g. findConversionRange computes it for the trigger word) to
+    /// avoid running the conversion twice.
+    static func shouldConvert(_ word: String, minLength: Int = minWordLength, isRetroactive: Bool = false, precomputed: (converted: String, direction: SwitchDirection)? = nil) -> (converted: String, direction: SwitchDirection)? {
         // 1) Too short
         guard word.count >= minLength else { return nil }
 
@@ -559,8 +555,8 @@ enum AutoSwitcher {
         // 3d) URLs, emails, file paths, CLI flags — don't convert
         if isNonConvertible(word) { return nil }
 
-        // 4) Must be convertible
-        guard let result = Translit.convert(word) else { return nil }
+        // 4) Must be convertible (use precomputed result when provided)
+        guard let result = precomputed ?? Translit.convert(word) else { return nil }
         guard result.converted != word else { return nil }
 
         // 4a) Built-in common words — NEVER convert (unless retroactive).

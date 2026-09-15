@@ -5,14 +5,26 @@ import Darwin
 /// The same mechanism used by the macism utility.
 enum LayoutSwitch {
 
-    private static func sources() -> [TISInputSource] {
+    /// Cached list of selectable input sources. TISCreateInputSourceList is a
+    /// system call on every layout select — the hot path of every conversion.
+    /// Invalidated when a select fails (user may have edited layouts).
+    private static var cachedSources: [TISInputSource]?
+
+    private static func loadSources() -> [TISInputSource] {
         guard let cfArray = TISCreateInputSourceList(
             [kTISPropertyInputSourceIsSelectCapable: true] as CFDictionary,
             false
         )?.takeRetainedValue() else { return [] }
 
         // CFArray bridges freely to NSArray; elements are TISInputSourceRef.
-        return (cfArray as NSArray).map { $0 as! TISInputSource }
+        let list = (cfArray as NSArray).map { $0 as! TISInputSource }
+        if !list.isEmpty { cachedSources = list }
+        return list
+    }
+
+    private static func sources() -> [TISInputSource] {
+        if let cached = cachedSources { return cached }
+        return loadSources()
     }
 
     private static func property(_ source: TISInputSource, _ key: CFString) -> String? {
@@ -31,10 +43,18 @@ enum LayoutSwitch {
 
     /// Switches the system layout to Russian or English.
     /// Returns false if no suitable layout is found (not installed in the system).
+    /// On total failure the source list cache is refreshed once — protects
+    /// against a stale cache after the user edits layouts in System Settings.
     @discardableResult
     static func select(toRussian: Bool) -> Bool {
-        let sources = self.sources()
+        for _ in 0..<2 {
+            if selectFrom(sources(), toRussian: toRussian) { return true }
+            cachedSources = nil
+        }
+        return false
+    }
 
+    private static func selectFrom(_ sources: [TISInputSource], toRussian: Bool) -> Bool {
         // 1. Known exact IDs
         let exactTargets: [String] = toRussian
             ? ["com.apple.keylayout.Russian", "com.apple.keylayout.Russian-PC", "com.apple.keylayout.RussianWin"]

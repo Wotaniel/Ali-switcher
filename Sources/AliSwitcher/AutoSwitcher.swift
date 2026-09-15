@@ -322,13 +322,13 @@ enum AutoSwitcher {
     ///    explicitly double-Shifted).
     /// 2. Walk backwards: convert previous words if:
     ///    a. Same script (Latin/Cyrillic) as the last word
-    ///    b. Builtin words («не», «the», «как») → convert unconditionally
-    ///       (trigger already proved wrong layout)
-    ///    c. Non-builtin ≥2 chars → spell-checker: orig must be misspelled +
-    ///       converted must be valid in target
+    ///    b. NOT built-in (spell-checker gate) OR a real word existing in BOTH
+    ///       dictionaries (direction tiebreak converts it toward the target)
+    ///    c. ≥2 chars spell-check: orig must be misspelled in its own language;
+    ///       gibberish converts unconditionally in manual, needs a valid
+    ///       conversion in auto
     ///    d. Single-char → skip spell-checker (useless for 1-letter words)
-    ///    e. Learned exceptions block (user undid this word before)
-    ///    IDENTICAL rules for manual and auto.
+    ///    e. Learned exceptions block — auto only (user undid this word)
     /// 3. Stop at: different script, valid word, exception, or unconvertible.
     ///
     /// Note: conversion of SELECTED TEXT (convertSelectionViaClipboard) is
@@ -403,12 +403,12 @@ enum AutoSwitcher {
 
             // Spell-checker (≥2 chars, not mixed-script, not all-caps).
             //
-            // Builtin words: in AUTO mode, spell-checker RUNS — if the word is
-            // valid in its own language (origMisspelled=false), the walk stops.
-            // Previously builtins bypassed spell-checker entirely, which caused
-            // valid words like «это»/«из» to be converted alongside the trigger
-            // word (BUG: «это из сдд» → «'nj bp cll» instead of just «сдд»→«cll»).
-            // In MANUAL mode, builtins still bypass (user explicitly asked).
+            // Builtin words: spell-checker RUNS in BOTH modes — if the word is
+            // valid in its own language (origMisspelled=false), the walk
+            // continues only via the direction tiebreak (converted must be
+            // valid in the target). Previously manual mode let builtins bypass the
+            // spell-checker, which corrupted correct words like «но все»
+            // (2026-09-11: «но все штзгеы» → «yt dct inputs» — false positive).
             //
             // Mixed-script words: skip spell-checker (NSSpellChecker can't
             // reason about them) — they're always wrong-layout typos.
@@ -434,7 +434,7 @@ enum AutoSwitcher {
             // manual mode: user explicitly asked → convert even if result is
             // gibberish in target.
             let prevAllCaps = prevShape.isAllCaps
-            if !prevAllCaps, !(isBuiltinWord(prevSeg.word) && isManual), prevShape.length >= 2,
+            if !prevAllCaps, prevShape.length >= 2,
                !prevShape.hasMixedScript {
                 let origMisspelled = isMisspelled(prevSeg.word, in: origLang)
 

@@ -958,11 +958,24 @@ enum SelfTests {
         check("plan: «это из сдд» → wordCount 2", p40d?.wordCount == 2)
         check("plan: «это из сдд» → prefix «это »", p40d?.prefix == "это ")
 
-        // Same case in manual mode: builtins BYPASS spell-checker — all convert.
-        // User explicitly double-Shifted → no spell-checker for builtins.
+        // Same case in manual mode: builtins go through the spell-checker too
+        // (PR #33 removed the manual bypass — same behavior as auto).
+        // «из»: valid RU + «bp» valid EN → both valid → tiebreak converts.
+        // «это»: valid RU + «'nj» invalid EN → word is genuinely Russian → stop.
         let p40e = AutoSwitcher.findConversionRange(in: "это из сдд", isManual: true)
-        check("plan: «это из сдд» (manual) → «'nj bp cll»", p40e?.convertedText == "'nj bp cll")
-        check("plan: «это из сдд» (manual) → wordCount 3", p40e?.wordCount == 3)
+        check("plan: «это из сдд» (manual) → «bp cll»", p40e?.convertedText == "bp cll")
+        check("plan: «это из сдд» (manual) → wordCount 2", p40e?.wordCount == 2)
+        check("plan: «это из сдд» (manual) → prefix «это »", p40e?.prefix == "это ")
+
+        // Regression 2026-09-11 12:31 (user log): manual double-Shift on
+        // «штзгеы» (= inputs typed in RU layout) must convert ONLY the last
+        // word. Builtins «но», «все» are correct Russian: spell-checker stops
+        // the walk («dct»/«yt» are not English words). Old bug: the manual
+        // builtin bypass converted all three → «yt dct inputs».
+        let p44a = AutoSwitcher.findConversionRange(in: "но все штзгеы", isManual: true)
+        check("plan: «но все штзгеы» (manual) → «inputs» only", p44a?.convertedText == "inputs")
+        check("plan: «но все штзгеы» (manual) → wordCount 1", p44a?.wordCount == 1)
+        check("plan: «но все штзгеы» → prefix «но все »", p44a?.prefix == "но все ")
 
         // --- Scenario 40b: direction priority — word valid in BOTH dictionaries ---
         // Clear exception state (previous test added "ghbdtn" to enWords).

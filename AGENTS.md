@@ -134,7 +134,7 @@ Direction is **implicit in the word's script** (alphabet). Two simple `Set<Strin
 - **Retroactive walk**: previous words convert if same script + misspelled in own language
 - **Spell-checker in retro walk**: `origMisspelled` runs in BOTH modes. `convValid` (converted must be valid in target) runs in BOTH modes when `origMisspelled=false` (word valid in source). All-caps words bypass spell-checker (NSSpellChecker treats them as valid acronyms → ЕРФТЛ→THANK works)
 - **Direction priority** (both modes): if word is valid in source AND converted is valid in target → word exists in both dictionaries → CONVERT (direction decides: EN→RU → Russian wins, RU→EN → English wins). If valid in source but NOT in target → STOP. Example: «vs»→«мы» both valid → convert; «by»→«ин» «ин» invalid in RU → stop
-- **Auto-only checks** in retroactive: exceptions block, `convValid` for gibberish words (origMisspelled=true); builtins SKIPPED (retroactive mode)
+- **Auto-only checks** in retroactive: exceptions block, `convValid` for gibberish words (origMisspelled=true)
 - **Manual-only**: no exceptions, no `convValid` for gibberish words — user explicitly asked to convert
 - **Single-char words**: convert in retroactive (size doesn't matter). In auto trigger: single-char converts only if result is builtin
 - Returns `ConversionPlan` with: prefix, originalText, convertedText, lastGap, deleteCount, direction
@@ -185,7 +185,7 @@ There is no force-convert mechanism. Only undo (exception) learns.
 
 **Built-in words** = safety net for common words NSSpellChecker may miss.
 → Checked BEFORE learned words and spell-checker in `shouldConvert` (trigger word only).
-→ In retroactive walk: **auto mode** — builtins go through spell-checker (`origMisspelled` stops at valid words like «это», «из», «by»). **Manual mode** — builtins bypass spell-checker (user explicitly asked to convert).
+→ In retroactive walk: builtins go through the spell-checker in BOTH modes (`origMisspelled` stops at valid words like «это», «из», but a valid word whose conversion is also valid converts via the direction tiebreak). PR #33 removed the old manual-only bypass — it corrupted correct words («но все штзгеы» → «yt dct inputs»).
 
 **Deduplication — automatic via Set:**
 - `enWords` and `ruWords` are `Set<String>` — duplicates impossible by construction

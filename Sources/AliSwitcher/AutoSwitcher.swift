@@ -111,12 +111,79 @@ enum AutoSwitcher {
     /// callers (e.g. shouldConvert) treat this as an unambiguous wrong-layout
     /// signal and skip the spell-checker.
     static func hasMixedScript(_ word: String) -> Bool {
+        shape(of: word).hasMixedScript
+    }
+
+    // MARK: - Word shape (single scan per word)
+
+    /// Everything the decision pipeline needs to know about a word, computed
+    /// in ONE pass over the string. Trigger-word filter (shouldConvert) and
+    /// the retro walk share this table — per-word scans exist nowhere else.
+    struct WordShape {
+        /// Character count of the whole word (letters AND non-letters).
+        let length: Int
+        /// Contains at least one letter.
+        let hasLetter: Bool
+        /// More than 1 letter and every letter uppercase (HTML, ЕРФТЛ, API).
+        let isAllCaps: Bool
+        /// Contains digits (iPhone15, 3D).
+        let hasDigit: Bool
+        /// Contains underscore (my_var, MAX_SIZE).
+        let hasUnderscore: Bool
+        /// Contains BOTH Cyrillic and Latin letters.
+        let hasMixedScript: Bool
+        /// First LETTER is Latin (non-letter prefixes like quotes are skipped;
+        /// a word with no letters is NOT Latin — false, like isWordLatin did).
+        let isLatin: Bool
+    }
+
+    /// Single-pass scan of a word.
+    static func shape(of word: String) -> WordShape {
+        var length = 0
+        var letterCount = 0
+        var allUppercase = true
+        var hasDigit = false
+        var hasUnderscore = false
         var hasCyrillic = false
         var hasLatin = false
-        for ch in word where ch.isLetter {
-            if Translit.isCyrillic(ch) { hasCyrillic = true } else { hasLatin = true }
+        var isLatin = false
+        for ch in word {
+            length += 1
+            if ch.isNumber { hasDigit = true }
+            if ch == "_" { hasUnderscore = true }
+            guard ch.isLetter else { continue }
+            letterCount += 1
+            if !ch.isUppercase { allUppercase = false }
+            let cyr = Translit.isCyrillic(ch)
+            if cyr { hasCyrillic = true } else { hasLatin = true }
+            if letterCount == 1 { isLatin = !cyr }
         }
-        return hasCyrillic && hasLatin
+        return WordShape(
+            length: length,
+            hasLetter: letterCount > 0,
+            isAllCaps: letterCount > 1 && allUppercase,
+            hasDigit: hasDigit,
+            hasUnderscore: hasUnderscore,
+            hasMixedScript: hasCyrillic && hasLatin,
+            isLatin: isLatin
+        )
+    }
+
+    // MARK: - Spell-checker primitives
+
+    /// Is the word misspelled in `language` (per NSSpellChecker)?
+    private static func isMisspelled(_ word: String, in language: String) -> Bool {
+        NSSpellChecker.shared.checkSpelling(
+            of: word, startingAt: 0,
+            language: language, wrap: false,
+            inSpellDocumentWithTag: 0, wordCount: nil
+        ).location != NSNotFound
+    }
+
+    /// Is the word valid in `language`, OR at least a domain name?
+    /// ("adguard.com" is not a dictionary word but is clearly intended.)
+    private static func validOrDomain(_ word: String, in language: String) -> Bool {
+        !isMisspelled(word, in: language) || matchesDomainPattern(word)
     }
 
     /// Should this word be skipped entirely (URL, email, path, code)?
@@ -127,12 +194,12 @@ enum AutoSwitcher {
 
     /// Does this word contain digits? (iPhone15, 3D, etc.)
     static func containsDigits(_ word: String) -> Bool {
-        word.contains(where: { $0.isNumber })
+        shape(of: word).hasDigit
     }
 
     /// Does this word contain underscores? (my_var, MAX_SIZE — code identifiers)
     static func containsUnderscore(_ word: String) -> Bool {
-        word.contains("_")
+        shape(of: word).hasUnderscore
     }
 
     /// Is this word a built-in common word that should NEVER be converted?
@@ -278,7 +345,7 @@ enum AutoSwitcher {
 
         let mode = isManual ? "manual" : "auto"
         let direction = lastResult.direction
-        let lastIsLatin = isWordLatin(lastSeg.word)
+        let lastIsLatin = shape(of: lastSeg.word).isLatin
 
         log(.debug, "findRange[\(mode)]: buffer=«\(redact(text))» segments=\(segments.map { "\($0.word)" })")
         log(.debug, "findRange[\(mode)]: last=«\(lastSeg.word)»→«\(lastResult.converted)» dir=\(direction == .toCyrillic ? "EN→RU" : "RU→EN") latin=\(lastIsLatin)")
@@ -302,7 +369,6 @@ enum AutoSwitcher {
         // punctuation) handled separately by callers.
         var convertedText = lastResult.converted
         var wordIndex = segments.count - 2
-        let checker = NSSpellChecker.shared
         let origLang = direction == .toCyrillic ? "en" : "ru"
 
         while wordIndex >= 0 {
@@ -312,9 +378,9 @@ enum AutoSwitcher {
 
             // Same script as last word? If different → stop (can't convert
             // words from a different "wrong layout" in one pass).
-            let prevIsLatin = isWordLatin(prevSeg.word)
-            if prevIsLatin != lastIsLatin {
-                log(.debug, "findRange[\(mode)]: retro «\(prevSeg.word)» → stop (different script, latin=\(prevIsLatin))")
+            let prevShape = shape(of: prevSeg.word)
+            if prevShape.isLatin != lastIsLatin {
+                log(.debug, "findRange[\(mode)]: retro «\(prevSeg.word)» → stop (different script, latin=\(prevShape.isLatin))")
                 break
             }
 
@@ -367,27 +433,17 @@ enum AutoSwitcher {
             // convValid for gibberish words (origMisspelled=true) is auto-only:
             // manual mode: user explicitly asked → convert even if result is
             // gibberish in target.
-            let prevLetters = prevSeg.word.filter { $0.isLetter }
-            let prevAllCaps = prevLetters.count > 1 && prevLetters.allSatisfy({ $0.isUppercase })
-            if !prevAllCaps, !(isBuiltinWord(prevSeg.word) && isManual), prevSeg.word.count >= 2,
-               !hasMixedScript(prevSeg.word) {
-                let origMisspelled = checker.checkSpelling(
-                    of: prevSeg.word, startingAt: 0,
-                    language: origLang, wrap: false,
-                    inSpellDocumentWithTag: 0, wordCount: nil
-                ).location != NSNotFound
+            let prevAllCaps = prevShape.isAllCaps
+            if !prevAllCaps, !(isBuiltinWord(prevSeg.word) && isManual), prevShape.length >= 2,
+               !prevShape.hasMixedScript {
+                let origMisspelled = isMisspelled(prevSeg.word, in: origLang)
 
                 if origMisspelled {
                     // Word is gibberish in own language → wrong layout candidate.
                     // Auto: also require convValid (converted must be valid in target).
                     // Manual: user explicitly asked → convert unconditionally.
                     if !isManual {
-                        let convValid = checker.checkSpelling(
-                            of: prevResult.converted, startingAt: 0,
-                            language: convLang, wrap: false,
-                            inSpellDocumentWithTag: 0, wordCount: nil
-                        ).location == NSNotFound
-                        if !convValid, !matchesDomainPattern(prevResult.converted) {
+                        if !validOrDomain(prevResult.converted, in: convLang) {
                             log(.debug, "findRange[\(mode)]: retro «\(prevSeg.word)» → stop (converted «\(prevResult.converted)» invalid in \(convLang))")
                             break
                         }
@@ -398,12 +454,7 @@ enum AutoSwitcher {
                     // If yes → word exists in both dictionaries → direction
                     // priority → convert (don't stop).
                     // If no → word belongs to source language → stop.
-                    let convValid = checker.checkSpelling(
-                        of: prevResult.converted, startingAt: 0,
-                        language: convLang, wrap: false,
-                        inSpellDocumentWithTag: 0, wordCount: nil
-                    ).location == NSNotFound
-                    if !convValid, !matchesDomainPattern(prevResult.converted) {
+                    if !validOrDomain(prevResult.converted, in: convLang) {
                         log(.debug, "findRange[\(mode)]: retro «\(prevSeg.word)» → stop (valid in \(origLang), converted «\(prevResult.converted)» invalid in \(convLang))")
                         break
                     }
@@ -530,27 +581,27 @@ enum AutoSwitcher {
     /// holds (e.g. findConversionRange computes it for the trigger word) to
     /// avoid running the conversion twice.
     static func shouldConvert(_ word: String, minLength: Int = minWordLength, isRetroactive: Bool = false, precomputed: (converted: String, direction: SwitchDirection)? = nil) -> (converted: String, direction: SwitchDirection)? {
+        // One scan per word — every structural filter below reads the shape.
+        let s = shape(of: word)
+
         // 1) Too short
-        guard word.count >= minLength else { return nil }
+        guard s.length >= minLength else { return nil }
 
         // 2) Must contain letters
-        guard word.contains(where: { $0.isLetter }) else { return nil }
+        guard s.hasLetter else { return nil }
 
         // 3) All uppercase → likely an abbreviation (HTML, JSON, etc.)
-        let letters = word.filter { $0.isLetter }
-        if letters.count > 1 && letters.allSatisfy({ $0.isUppercase }) {
-            return nil
-        }
+        if s.isAllCaps { return nil }
 
         // Note: mixed-case words (iPhone, macOS) are NOT filtered here.
         // If they're in the wrong layout ("шЗрщту" = "iPhone" typed in RU layout),
         // the spell-checker validates the conversion — no need to block them.
 
         // 3b) Words with digits (iPhone15, 3D, C4H8) — don't convert
-        if containsDigits(word) { return nil }
+        if s.hasDigit { return nil }
 
         // 3c) Words with underscores (snake_case identifiers: my_var) — don't convert
-        if containsUnderscore(word) { return nil }
+        if s.hasUnderscore { return nil }
 
         // 3d) URLs, emails, file paths, CLI flags — don't convert
         if isNonConvertible(word) { return nil }
@@ -583,7 +634,7 @@ enum AutoSwitcher {
         //   «Ш» → «I» ✓ (I is builtin EN)   «ш» → «i» ✓ (i is builtin EN)
         //   «g» → «п» ✗ (п NOT builtin)     «q» → «й» ✗ (й NOT builtin)
         //   «п» → «g» ✗ (g NOT builtin)     «ъ» → «]» ✗ (] not even a letter)
-        if word.count == 1, minLength <= 1 {
+        if s.length == 1, minLength <= 1 {
             if isBuiltinWord(result.converted) {
                 return result
             }
@@ -598,13 +649,11 @@ enum AutoSwitcher {
         // Example: «Э"nj» (Cyrillic Э leftover + ASCII " (Shift+э) + Latin nj)
         // → «ЭЭто» — spell-checker thought «nj» was a valid English abbreviation
         // and rejected conversion. With mixed-script detection: convert freely.
-        if hasMixedScript(word) {
+        if s.hasMixedScript {
             return result
         }
 
         // 5–6) Spell-check both directions
-        let checker = NSSpellChecker.shared
-
         let (origLang, convLang): (String, String) = result.direction == .toCyrillic
             ? ("en", "ru")    // Latin word → Cyrillic; check EN misspelled, RU valid
             : ("ru", "en")   // Cyrillic word → Latin;  check RU misspelled, EN valid
@@ -615,30 +664,11 @@ enum AutoSwitcher {
         // letters "valid" in EN, so the check is meaningless for them).
         // Multi-char retroactive words MUST be checked — otherwise valid English
         // words like "by" (→ "ин") get incorrectly converted retroactively.
-        if word.count >= 2 {
-            let origMisspelled = checker.checkSpelling(
-                of: word, startingAt: 0,
-                language: origLang, wrap: false,
-                inSpellDocumentWithTag: 0, wordCount: nil
-            ).location != NSNotFound
-
-            guard origMisspelled else { return nil }
+        if s.length >= 2 {
+            guard isMisspelled(word, in: origLang) else { return nil }
         }
 
-        let convValid = checker.checkSpelling(
-            of: result.converted, startingAt: 0,
-            language: convLang, wrap: false,
-            inSpellDocumentWithTag: 0, wordCount: nil
-        ).location == NSNotFound
-
-        // If NSSpellChecker doesn't recognize the converted word BUT it looks
-        // like a domain name (e.g. "adguard.com"), accept — the user likely
-        // typed a URL in the wrong layout.
-        if !convValid, matchesDomainPattern(result.converted) {
-            return result
-        }
-
-        guard convValid else { return nil }
+        guard validOrDomain(result.converted, in: convLang) else { return nil }
 
         return result
     }

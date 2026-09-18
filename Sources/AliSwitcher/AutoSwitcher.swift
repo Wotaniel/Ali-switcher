@@ -328,7 +328,24 @@ enum AutoSwitcher {
         in text: String,
         isManual: Bool
     ) -> ConversionPlan? {
-        let segments = parseBufferSegments(text)
+        var segments = parseBufferSegments(text)
+
+        // Letter-less trailing segments (digits, «+», symbol runs) are
+        // layout-independent — in manual mode they belong to lastGap (deleted
+        // and retyped as-is), and the trigger is the last word WITH letters.
+        // Field 2026-09-18, log: «Rjgbz eljcnjdthtybz + » — trailing «+» was
+        // the last "word" → unconvertible → silent layout toggle, no conversion.
+        var trailingSuffix = ""
+        if isManual {
+            var removed: [(word: String, gap: String)] = []
+            while segments.count > 1, let s = segments.last,
+                  !shape(of: s.word).hasLetter {
+                removed.insert(s, at: 0)
+                segments.removeLast()
+            }
+            trailingSuffix = removed.map { $0.word + $0.gap }.joined()
+        }
+
         guard let lastSeg = segments.last, !lastSeg.word.isEmpty,
               let lastResult = Translit.convert(lastSeg.word),
               lastResult.converted != lastSeg.word else { return nil }
@@ -366,9 +383,22 @@ enum AutoSwitcher {
             let gap = prevSeg.gap
             if prevSeg.word.isEmpty { wordIndex -= 1; continue }
 
+            let prevShape = shape(of: prevSeg.word)
+
+            // Letter-less segments (digits, «+», symbol runs) are transparent:
+            // they are layout-independent, keep them in place and walk on.
+            // Field 2026-09-18, log: «xthtp 2 ytltkb» — the digit «2» was
+            // treated as a script change, the walk stopped and «xthtp»
+            // («через») never converted.
+            if !prevShape.hasLetter {
+                log(.debug, "findRange[\(mode)]: retro «\(prevSeg.word)» → transparent (no letters), keep in place")
+                convertedText = prevSeg.word + gap + convertedText
+                wordIndex -= 1
+                continue
+            }
+
             // Same script as last word? If different → stop (can't convert
             // words from a different "wrong layout" in one pass).
-            let prevShape = shape(of: prevSeg.word)
             if prevShape.isLatin != lastIsLatin {
                 log(.debug, "findRange[\(mode)]: retro «\(prevSeg.word)» → stop (different script, latin=\(prevShape.isLatin))")
                 break
@@ -476,7 +506,9 @@ enum AutoSwitcher {
             }
         }
 
-        let lastGap = lastSeg.gap
+        // Manual: letter-less trailing segments (merged out above) are deleted
+        // and retyped as-is — they ride along inside the final gap.
+        let lastGap = lastSeg.gap + trailingSuffix
         let wordCount = segments.count - wordIndex - 1
 
         log(.debug, "findRange[\(mode)]: RESULT prefix=«\(redact(prefix))» orig=«\(redact(originalText))» conv=«\(redact(convertedText))» gap=«\(redact(lastGap))» words=\(wordCount)")

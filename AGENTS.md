@@ -129,6 +129,7 @@ Direction is **implicit in the word's script** (alphabet). Two simple `Set<Strin
 7. **5–6) Spell-checker** (NSSpellChecker): orig must be misspelled + converted must be valid
 
 ### `findConversionRange` — unified conversion algorithm
+- **Letter-less segments are transparent** (PR #37): digits, «+» and symbol runs never stop the retro walk (they stay in place, walk continues) and in manual mode trailing letter-less segments are repositioned into `lastGap` (trigger = last word WITH letters). Logs 2026-09-18: «Rjgbz eljcnjdthtybz +» (trailing «+» killed the conversion) and «xthtp 2 ytltkb» (digit «2» broke the walk).
 - Shared between auto-convert (`isManual: false`) and manual double-Shift (`isManual: true`)
 - **Last word**: ALWAYS converts (no checks for manual; `shouldConvert` for auto)
 - **Retroactive walk**: previous words convert if same script + misspelled in own language

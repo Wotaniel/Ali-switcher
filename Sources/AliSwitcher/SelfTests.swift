@@ -1197,5 +1197,53 @@ enum SelfTests {
         // Restore state
         AutoSwitcher.enWords = savedEN45
         AutoSwitcher.ruWords = savedRU45
+
+        // --- Scenario 46: transparent letter-less segments (field 2026-09-18) ---
+        // Two live bugs from the user log: a trailing «+» killed the whole
+        // manual conversion (three double-Shifts, nothing happened), and a
+        // digit «2» in the middle stopped the retro walk at «xthtp 2 недели».
+        // Rule: letter-less segments are layout-independent → transparent.
+        let savedEN46 = AutoSwitcher.enWords
+        let savedRU46 = AutoSwitcher.ruWords
+        AutoSwitcher.enWords = []
+        AutoSwitcher.ruWords = []
+
+        // 46a. MANUAL, trailing symbol: trigger is the last word WITH letters,
+        // «+ » rides inside lastGap (deleted + retyped as-is).
+        let p46a = AutoSwitcher.findConversionRange(in: "Rjgbz eljcnjdthtybz + ", isManual: true)
+        check("46a: «Rjgbz eljcnjdthtybz + » (manual) converts",
+              p46a?.convertedText == "Копия удостоверения")
+        check("46a: suffix rides in lastGap (« + »)",
+              p46a?.lastGap == " + ")
+        check("46a: deleteCount covers word (19) + suffix (3)",
+              p46a?.deleteCount == 19 && p46a?.lastGap.count == 3)
+
+        // 46b. MANUAL, digit in the middle: retro walk passes through «2».
+        let p46b = AutoSwitcher.findConversionRange(in: "xthtp 2 ytltkb", isManual: true)
+        check("46b: «xthtp 2 ytltkb» (manual) → «через 2 недели»",
+              p46b?.convertedText == "через 2 недели")
+        check("46b: wordCount 3 (transparent digit counts as segment)",
+              p46b?.wordCount == 3)
+        check("46b: deleteCount 14 (letter-less kept and retyped)",
+              p46b?.deleteCount == 14)
+
+        // 46c. AUTO, digit in the middle: same transparency for the retro walk.
+        let p46c = AutoSwitcher.evaluateAutoConvert(buffer: "xthtp 2 ytltkb", boundaryChar: " ")
+        check("46c: «xthtp 2 ytltkb» (auto) → «через 2 недели»",
+              p46c?.convertedText == "через 2 недели")
+
+        // 46d. AUTO, trailing symbol: trigger must be the real last segment —
+        // auto does NOT reposition (unchanged), symbol-only tail → nil.
+        let p46d = AutoSwitcher.evaluateAutoConvert(buffer: "Rjgbz eljcnjdthtybz +", boundaryChar: " ")
+        check("46d: auto with «+» tail → nil (unchanged)", p46d == nil)
+
+        // 46e. MANUAL, leading symbol island: transparency inside the walk.
+        let p46e = AutoSwitcher.findConversionRange(in: "+ штзгеы", isManual: true)
+        check("46e: «+ штзгеы» (manual) → «+ inputs»",
+              p46e?.convertedText == "+ inputs")
+
+        // Restore state
+        AutoSwitcher.enWords = savedEN46
+        AutoSwitcher.ruWords = savedRU46
     }
 }

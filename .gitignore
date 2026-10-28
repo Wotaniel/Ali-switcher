@@ -25,3 +25,7 @@ build/
 xcuserdata/
 DerivedData/
 *.xcodeproj/project.xcworkspace/xcuserdata/
+
+# agent harness artifacts
+.agents/
+skills-lock.json
